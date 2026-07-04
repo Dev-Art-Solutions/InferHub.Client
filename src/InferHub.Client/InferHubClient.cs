@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using InferHub.Client.Exceptions;
 using InferHub.Client.Models;
@@ -43,6 +44,28 @@ public sealed class InferHubClient : IInferHubClient
     }
 
     /// <inheritdoc/>
+    public IAsyncEnumerable<ChatResponse> ChatStreamAsync(ChatRequest request, CancellationToken cancellationToken = default)
+    {
+        request.Stream = true;
+        return StreamNdjsonAsync<ChatRequest, ChatResponse>(
+            "api/chat",
+            request,
+            static chunk => (chunk.Done == true, chunk.Error),
+            cancellationToken);
+    }
+
+    /// <inheritdoc/>
+    public IAsyncEnumerable<GenerateResponse> GenerateStreamAsync(GenerateRequest request, CancellationToken cancellationToken = default)
+    {
+        request.Stream = true;
+        return StreamNdjsonAsync<GenerateRequest, GenerateResponse>(
+            "api/generate",
+            request,
+            static chunk => (chunk.Done == true, chunk.Error),
+            cancellationToken);
+    }
+
+    /// <inheritdoc/>
     public async Task<StatusResponse> GetStatusAsync(CancellationToken cancellationToken = default)
     {
         return await GetAsync<StatusResponse>("api/status", cancellationToken);
@@ -69,6 +92,67 @@ public sealed class InferHubClient : IInferHubClient
         await EnsureSuccessAsync(response, cancellationToken);
         var result = await response.Content.ReadFromJsonAsync<TResult>(JsonOptions, cancellationToken);
         return result ?? throw new InferHubException(response.StatusCode, "empty response body", string.Empty);
+    }
+
+    private async IAsyncEnumerable<TChunk> StreamNdjsonAsync<TRequest, TChunk>(
+        string path,
+        TRequest body,
+        Func<TChunk, (bool Done, string? Error)> inspect,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+        where TChunk : class
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, path)
+        {
+            Content = JsonContent.Create(body, mediaType: null, options: JsonOptions)
+        };
+        using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+
+        using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var reader = new StreamReader(stream);
+
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var line = await reader.ReadLineAsync(cancellationToken);
+            if (line is null)
+            {
+                yield break;
+            }
+
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                continue;
+            }
+
+            TChunk? chunk;
+            try
+            {
+                chunk = JsonSerializer.Deserialize<TChunk>(line, JsonOptions);
+            }
+            catch (JsonException ex)
+            {
+                throw new InferHubException(response.StatusCode, $"Malformed NDJSON chunk: {ex.Message}", line);
+            }
+
+            if (chunk is null)
+            {
+                continue;
+            }
+
+            var (done, error) = inspect(chunk);
+            if (!string.IsNullOrEmpty(error))
+            {
+                throw new InferHubException(response.StatusCode, error, line);
+            }
+
+            yield return chunk;
+
+            if (done)
+            {
+                yield break;
+            }
+        }
     }
 
     private static async Task EnsureSuccessAsync(HttpResponseMessage response, CancellationToken cancellationToken)

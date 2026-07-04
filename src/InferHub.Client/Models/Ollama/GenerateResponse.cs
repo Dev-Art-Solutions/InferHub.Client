@@ -46,6 +46,13 @@ public sealed class GenerateResponse
     [JsonPropertyName("eval_duration")]
     public long? EvalDuration { get; set; }
 
+    /// <summary>
+    /// Terminal error surfaced by the coordinator. Populated when a streaming call ends
+    /// with the <c>{ "error": …, "done": true }</c> contract; always <c>null</c> on success.
+    /// </summary>
+    [JsonPropertyName("error")]
+    public string? Error { get; set; }
+
     /// <summary>Any additional Ollama-shaped fields.</summary>
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? AdditionalProperties { get; set; }

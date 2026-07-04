@@ -32,6 +32,25 @@ public interface IInferHubClient
     Task<GenerateResponse> GenerateAsync(GenerateRequest request, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Streaming chat call — <c>POST /api/chat</c> with <c>stream:true</c>. Yields one
+    /// <see cref="ChatResponse"/> per NDJSON chunk; the enumerator stops after the chunk
+    /// with <c>done:true</c>. A terminal error chunk (<c>{ "error": …, "done": true }</c>)
+    /// is surfaced as an <see cref="Exceptions.InferHubException"/> instead of a silent stop.
+    /// </summary>
+    /// <param name="request">Chat request. <see cref="ChatRequest.Stream"/> is forced to <c>true</c>.</param>
+    /// <param name="cancellationToken">Cancels the read loop; a cancelled token throws promptly.</param>
+    IAsyncEnumerable<ChatResponse> ChatStreamAsync(ChatRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Streaming generate call — <c>POST /api/generate</c> with <c>stream:true</c>. Yields
+    /// one <see cref="GenerateResponse"/> per NDJSON chunk; stops after <c>done:true</c>.
+    /// A terminal error chunk is surfaced as an <see cref="Exceptions.InferHubException"/>.
+    /// </summary>
+    /// <param name="request">Generate request. <see cref="GenerateRequest.Stream"/> is forced to <c>true</c>.</param>
+    /// <param name="cancellationToken">Cancels the read loop; a cancelled token throws promptly.</param>
+    IAsyncEnumerable<GenerateResponse> GenerateStreamAsync(GenerateRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Coordinator/fleet snapshot — <c>GET /api/status</c>.
     /// </summary>
     /// <param name="cancellationToken">Cancellation token.</param>

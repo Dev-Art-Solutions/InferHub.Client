@@ -6,8 +6,8 @@ a self-hosted, Ollama-compatible inference mesh.
 Point it at a coordinator, pass a Bearer token, and call chat, generate, model listing
 and status from C# with typed requests, dependency injection, and no heavy dependencies.
 
-> **v0.1.0** — foundation and core blocking inference. Streaming, embeddings, vector data
-> plane, RAG retrieval and admin follow in later phases.
+> **v0.2.0** — blocking + streaming inference. Embeddings, vector data plane, RAG
+> retrieval and admin follow in later phases.
 
 ## Install
 
@@ -48,15 +48,35 @@ var chat = await client.ChatAsync(new ChatRequest
 Console.WriteLine(chat.Message?.Content);
 ```
 
-## What ships in v0.1.0
+## What ships in v0.2.0
 
 | Method | Endpoint |
 |---|---|
 | `ListModelsAsync` | `GET /api/tags` |
 | `GenerateAsync` (blocking) | `POST /api/generate` with `stream:false` |
 | `ChatAsync` (blocking) | `POST /api/chat` with `stream:false` |
+| `ChatStreamAsync` | `POST /api/chat` with `stream:true` (NDJSON → `IAsyncEnumerable<ChatResponse>`) |
+| `GenerateStreamAsync` | `POST /api/generate` with `stream:true` (NDJSON → `IAsyncEnumerable<GenerateResponse>`) |
 | `GetStatusAsync` | `GET /api/status` |
 | `PingAsync` | `GET /health` |
+
+### Streaming
+
+```csharp
+await foreach (var chunk in client.ChatStreamAsync(new ChatRequest
+{
+    Model = "llama3",
+    Messages = new[] { new ChatMessage { Role = "user", Content = "Stream me a haiku." } }
+}, cancellationToken))
+{
+    Console.Write(chunk.Message?.Content);
+}
+```
+
+The enumerator stops as soon as a chunk arrives with `done:true`. A terminal error
+chunk (`{ "error": …, "done": true }`) is surfaced as `InferHubException` — the client
+never retries mid-stream, so a partial answer plus a clean exception is the contract.
+Cancelling the token throws promptly out of the `await foreach`.
 
 Request models carry an extension bag (`AdditionalProperties`), so any unknown fields
 from the Ollama contract pass through untouched — you can hand-set `options`, `format`,

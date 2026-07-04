@@ -175,6 +175,95 @@ public class InferHubClientTests
     }
 
     [Fact]
+    public async Task ChatStreamAsync_yields_chunks_and_stops_on_done()
+    {
+        var handler = new StreamingHttpMessageHandler();
+        var http = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:5080/") };
+        var client = new InferHubClient(http);
+
+        handler.EnqueueLine("""{"model":"llama3","message":{"role":"assistant","content":"hel"},"done":false}""");
+        handler.EnqueueLine("""{"model":"llama3","message":{"role":"assistant","content":"lo"},"done":false}""");
+        handler.EnqueueLine("""{"model":"llama3","message":{"role":"assistant","content":"!"},"done":true}""");
+        handler.EnqueueLine("""{"model":"llama3","message":{"role":"assistant","content":"IGNORED"},"done":false}""");
+        handler.Complete();
+
+        var deltas = new List<string>();
+        await foreach (var chunk in client.ChatStreamAsync(new ChatRequest { Model = "llama3" }))
+        {
+            deltas.Add(chunk.Message?.Content ?? string.Empty);
+        }
+
+        Assert.Equal(new[] { "hel", "lo", "!" }, deltas);
+
+        var sent = JsonDocument.Parse(handler.RequestBodies[0]).RootElement;
+        Assert.True(sent.GetProperty("stream").GetBoolean());
+    }
+
+    [Fact]
+    public async Task ChatStreamAsync_surfaces_terminal_error_chunk_as_exception()
+    {
+        var handler = new StreamingHttpMessageHandler();
+        var http = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:5080/") };
+        var client = new InferHubClient(http);
+
+        handler.EnqueueLine("""{"model":"llama3","message":{"role":"assistant","content":"partial"},"done":false}""");
+        handler.EnqueueLine("""{"error":"node dropped mid-stream","done":true}""");
+        handler.Complete();
+
+        var seen = new List<string?>();
+        var ex = await Assert.ThrowsAsync<InferHubException>(async () =>
+        {
+            await foreach (var chunk in client.ChatStreamAsync(new ChatRequest { Model = "llama3" }))
+            {
+                seen.Add(chunk.Message?.Content);
+            }
+        });
+
+        Assert.Equal("node dropped mid-stream", ex.Message);
+        Assert.Single(seen);
+        Assert.Equal("partial", seen[0]);
+    }
+
+    [Fact]
+    public async Task GenerateStreamAsync_yields_response_deltas_and_stops_on_done()
+    {
+        var handler = new StreamingHttpMessageHandler();
+        var http = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:5080/") };
+        var client = new InferHubClient(http);
+
+        handler.EnqueueLine("""{"model":"llama3","response":"po","done":false}""");
+        handler.EnqueueLine("""{"model":"llama3","response":"ng","done":true}""");
+        handler.Complete();
+
+        var deltas = new List<string>();
+        await foreach (var chunk in client.GenerateStreamAsync(new GenerateRequest { Model = "llama3", Prompt = "ping" }))
+        {
+            deltas.Add(chunk.Response ?? string.Empty);
+        }
+
+        Assert.Equal(new[] { "po", "ng" }, deltas);
+    }
+
+    [Fact]
+    public async Task ChatStreamAsync_cancellation_throws_promptly_between_chunks()
+    {
+        var handler = new StreamingHttpMessageHandler();
+        var http = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:5080/") };
+        var client = new InferHubClient(http);
+
+        using var cts = new CancellationTokenSource();
+        handler.EnqueueLine("""{"model":"llama3","message":{"role":"assistant","content":"first"},"done":false}""");
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+        {
+            await foreach (var chunk in client.ChatStreamAsync(new ChatRequest { Model = "llama3" }, cts.Token))
+            {
+                cts.Cancel();
+            }
+        });
+    }
+
+    [Fact]
     public async Task Bearer_handler_leaves_authorization_off_when_no_key()
     {
         var handler = new FakeHttpMessageHandler(HttpStatusCode.OK, """{"models":[]}""");
