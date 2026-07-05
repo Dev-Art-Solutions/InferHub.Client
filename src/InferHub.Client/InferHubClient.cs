@@ -66,6 +66,30 @@ public sealed class InferHubClient : IInferHubClient
     }
 
     /// <inheritdoc/>
+    public async Task<EmbedResponse> EmbedAsync(EmbedRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await PostAsync<EmbedRequest, EmbedResponse>("api/embed", request, cancellationToken);
+        if (response.Embeddings is null || response.Embeddings.Length == 0)
+        {
+            throw new InferHubException(System.Net.HttpStatusCode.OK, "embed response had no vectors", string.Empty);
+        }
+
+        return response;
+    }
+
+    /// <inheritdoc/>
+    public async Task<EmbeddingsResponse> EmbedLegacyAsync(EmbeddingsRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await PostAsync<EmbeddingsRequest, EmbeddingsResponse>("api/embeddings", request, cancellationToken);
+        if (response.Embedding is null || response.Embedding.Length == 0)
+        {
+            throw new InferHubException(System.Net.HttpStatusCode.OK, "embeddings response had no vector", string.Empty);
+        }
+
+        return response;
+    }
+
+    /// <inheritdoc/>
     public async Task<StatusResponse> GetStatusAsync(CancellationToken cancellationToken = default)
     {
         return await GetAsync<StatusResponse>("api/status", cancellationToken);

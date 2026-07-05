@@ -264,6 +264,115 @@ public class InferHubClientTests
     }
 
     [Fact]
+    public async Task EmbedAsync_batch_sends_string_array_input_and_returns_vectors()
+    {
+        const string body = """{"model":"nomic-embed-text","embeddings":[[0.1,0.2],[0.3,0.4]],"total_duration":123}""";
+        var (client, handler) = CreateClient(HttpStatusCode.OK, body);
+
+        var response = await client.EmbedAsync(EmbedRequest.FromTexts("nomic-embed-text", new[] { "alpha", "beta" }));
+
+        Assert.Equal("nomic-embed-text", response.Model);
+        Assert.Equal(2, response.Embeddings.Length);
+        Assert.Equal(new[] { 0.1f, 0.2f }, response.Embeddings[0]);
+        Assert.Equal(new[] { 0.3f, 0.4f }, response.Embeddings[1]);
+        Assert.Equal(123L, response.TotalDuration);
+
+        Assert.Equal(HttpMethod.Post, handler.Requests[0].Method);
+        Assert.EndsWith("api/embed", handler.Requests[0].RequestUri!.ToString());
+
+        var sent = JsonDocument.Parse(handler.RequestBodies[0]).RootElement;
+        Assert.Equal("nomic-embed-text", sent.GetProperty("model").GetString());
+        var input = sent.GetProperty("input");
+        Assert.Equal(JsonValueKind.Array, input.ValueKind);
+        Assert.Equal(2, input.GetArrayLength());
+        Assert.Equal("alpha", input[0].GetString());
+        Assert.Equal("beta", input[1].GetString());
+    }
+
+    [Fact]
+    public async Task EmbedAsync_single_string_sends_scalar_input()
+    {
+        const string body = """{"model":"nomic-embed-text","embeddings":[[0.5,0.6]]}""";
+        var (client, handler) = CreateClient(HttpStatusCode.OK, body);
+
+        var response = await client.EmbedAsync(EmbedRequest.FromText("nomic-embed-text", "just one"));
+
+        Assert.Single(response.Embeddings);
+        Assert.Equal(new[] { 0.5f, 0.6f }, response.Embeddings[0]);
+
+        var sent = JsonDocument.Parse(handler.RequestBodies[0]).RootElement;
+        var input = sent.GetProperty("input");
+        Assert.Equal(JsonValueKind.String, input.ValueKind);
+        Assert.Equal("just one", input.GetString());
+    }
+
+    [Fact]
+    public async Task EmbedAsync_empty_vector_list_throws_InferHubException()
+    {
+        var (client, _) = CreateClient(HttpStatusCode.OK, """{"model":"nomic-embed-text","embeddings":[]}""");
+
+        var ex = await Assert.ThrowsAsync<InferHubException>(() =>
+            client.EmbedAsync(EmbedRequest.FromText("nomic-embed-text", "x")));
+
+        Assert.Contains("no vectors", ex.Message);
+    }
+
+    [Fact]
+    public async Task EmbedAsync_404_no_embedding_node_surfaces_typed_error()
+    {
+        var (client, _) = CreateClient(HttpStatusCode.NotFound, """{"error":"no node hosts model 'nomic-embed-text'"}""");
+
+        var ex = await Assert.ThrowsAsync<InferHubException>(() =>
+            client.EmbedAsync(EmbedRequest.FromText("nomic-embed-text", "x")));
+
+        Assert.Equal(HttpStatusCode.NotFound, ex.StatusCode);
+        Assert.Equal("no node hosts model 'nomic-embed-text'", ex.Message);
+    }
+
+    [Fact]
+    public async Task EmbedAsync_400_bad_body_surfaces_typed_error()
+    {
+        var (client, _) = CreateClient(HttpStatusCode.BadRequest, """{"error":"model is required"}""");
+
+        var ex = await Assert.ThrowsAsync<InferHubException>(() =>
+            client.EmbedAsync(EmbedRequest.FromText("", "x")));
+
+        Assert.Equal(HttpStatusCode.BadRequest, ex.StatusCode);
+        Assert.Equal("model is required", ex.Message);
+    }
+
+    [Fact]
+    public async Task EmbedLegacyAsync_returns_single_vector()
+    {
+        const string body = """{"embedding":[0.11,0.22,0.33]}""";
+        var (client, handler) = CreateClient(HttpStatusCode.OK, body);
+
+        var response = await client.EmbedLegacyAsync(new EmbeddingsRequest
+        {
+            Model = "nomic-embed-text",
+            Prompt = "hello"
+        });
+
+        Assert.Equal(new[] { 0.11f, 0.22f, 0.33f }, response.Embedding);
+        Assert.EndsWith("api/embeddings", handler.Requests[0].RequestUri!.ToString());
+
+        var sent = JsonDocument.Parse(handler.RequestBodies[0]).RootElement;
+        Assert.Equal("nomic-embed-text", sent.GetProperty("model").GetString());
+        Assert.Equal("hello", sent.GetProperty("prompt").GetString());
+    }
+
+    [Fact]
+    public async Task EmbedLegacyAsync_empty_vector_throws()
+    {
+        var (client, _) = CreateClient(HttpStatusCode.OK, """{"embedding":[]}""");
+
+        var ex = await Assert.ThrowsAsync<InferHubException>(() =>
+            client.EmbedLegacyAsync(new EmbeddingsRequest { Model = "m", Prompt = "p" }));
+
+        Assert.Contains("no vector", ex.Message);
+    }
+
+    [Fact]
     public async Task Bearer_handler_leaves_authorization_off_when_no_key()
     {
         var handler = new FakeHttpMessageHandler(HttpStatusCode.OK, """{"models":[]}""");

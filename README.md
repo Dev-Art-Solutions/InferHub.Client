@@ -6,8 +6,8 @@ a self-hosted, Ollama-compatible inference mesh.
 Point it at a coordinator, pass a Bearer token, and call chat, generate, model listing
 and status from C# with typed requests, dependency injection, and no heavy dependencies.
 
-> **v0.2.0** — blocking + streaming inference. Embeddings, vector data plane, RAG
-> retrieval and admin follow in later phases.
+> **v0.3.0** — blocking + streaming inference, and embeddings (batch + legacy). Vector
+> data plane, RAG retrieval and admin follow in later phases.
 
 ## Install
 
@@ -48,7 +48,7 @@ var chat = await client.ChatAsync(new ChatRequest
 Console.WriteLine(chat.Message?.Content);
 ```
 
-## What ships in v0.2.0
+## What ships in v0.3.0
 
 | Method | Endpoint |
 |---|---|
@@ -57,6 +57,8 @@ Console.WriteLine(chat.Message?.Content);
 | `ChatAsync` (blocking) | `POST /api/chat` with `stream:false` |
 | `ChatStreamAsync` | `POST /api/chat` with `stream:true` (NDJSON → `IAsyncEnumerable<ChatResponse>`) |
 | `GenerateStreamAsync` | `POST /api/generate` with `stream:true` (NDJSON → `IAsyncEnumerable<GenerateResponse>`) |
+| `EmbedAsync` | `POST /api/embed` (batch — single string or string[]) |
+| `EmbedLegacyAsync` | `POST /api/embeddings` (legacy single `prompt`) |
 | `GetStatusAsync` | `GET /api/status` |
 | `PingAsync` | `GET /health` |
 
@@ -81,6 +83,27 @@ Cancelling the token throws promptly out of the `await foreach`.
 Request models carry an extension bag (`AdditionalProperties`), so any unknown fields
 from the Ollama contract pass through untouched — you can hand-set `options`, `format`,
 tool definitions, etc. without waiting on the client to type them.
+
+### Embeddings
+
+```csharp
+// Single input.
+var single = await client.EmbedAsync(
+    EmbedRequest.FromText("nomic-embed-text", "hello, world"));
+
+// Batch — one vector per input, same order.
+var batch = await client.EmbedAsync(EmbedRequest.FromTexts(
+    "nomic-embed-text",
+    new[] { "InferHub", "self-hosted", "inference mesh" }));
+
+Console.WriteLine(batch.Embeddings.Length);   // 3
+Console.WriteLine(batch.Embeddings[0].Length); // model dimension
+```
+
+`EmbedAsync` targets the modern batch endpoint (`/api/embed`); `EmbedLegacyAsync` wraps
+`/api/embeddings` for drop-in Ollama callers. An empty vector list on a 200 response is
+treated as malformed and surfaced as `InferHubException` — the client never returns a
+silent zero-vector result.
 
 ## Auth
 

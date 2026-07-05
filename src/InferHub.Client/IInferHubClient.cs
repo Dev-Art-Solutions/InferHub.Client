@@ -51,6 +51,30 @@ public interface IInferHubClient
     IAsyncEnumerable<GenerateResponse> GenerateStreamAsync(GenerateRequest request, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Batch embeddings call — <c>POST /api/embed</c>. Accepts a single string or a
+    /// string array as <see cref="EmbedRequest.Input"/>; returns one vector per input
+    /// in <see cref="EmbedResponse.Embeddings"/>. Use
+    /// <see cref="EmbedRequest.FromText(string, string)"/> or
+    /// <see cref="EmbedRequest.FromTexts(string, IEnumerable{string})"/> for the common cases.
+    /// Missing embedding node → <c>404</c>, bad body → <c>400</c>, node dropped mid-flight → <c>502</c>,
+    /// all surfaced as <see cref="Exceptions.InferHubException"/>. An empty vector list on 200
+    /// is treated as a malformed response and thrown, never silently returned.
+    /// </summary>
+    /// <param name="request">Embed request. <see cref="EmbedRequest.Model"/> is required.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<EmbedResponse> EmbedAsync(EmbedRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Legacy single-input embeddings call — <c>POST /api/embeddings</c>. Prefer
+    /// <see cref="EmbedAsync"/> for new code; this exists for drop-in Ollama callers.
+    /// Returns one vector in <see cref="EmbeddingsResponse.Embedding"/>.
+    /// </summary>
+    /// <param name="request">Legacy embeddings request. <see cref="EmbeddingsRequest.Model"/> and
+    /// <see cref="EmbeddingsRequest.Prompt"/> are required.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<EmbeddingsResponse> EmbedLegacyAsync(EmbeddingsRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Coordinator/fleet snapshot — <c>GET /api/status</c>.
     /// </summary>
     /// <param name="cancellationToken">Cancellation token.</param>
