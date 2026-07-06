@@ -1,11 +1,13 @@
 using InferHub.Client.Models;
 using InferHub.Client.Models.Ollama;
+using InferHub.Client.Models.Vector;
 
 namespace InferHub.Client;
 
 /// <summary>
 /// Client for talking to an InferHub coordinator over its Ollama-compatible HTTP API.
-/// v0.1.0 covers blocking chat/generate, model listing, status and health.
+/// Covers blocking + streaming chat/generate, model listing, embeddings, the vector
+/// data-plane, status and health.
 /// </summary>
 public interface IInferHubClient
 {
@@ -73,6 +75,59 @@ public interface IInferHubClient
     /// <see cref="EmbeddingsRequest.Prompt"/> are required.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     Task<EmbeddingsResponse> EmbedLegacyAsync(EmbeddingsRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Upsert a record into a collection — <c>POST /api/vector/{collection}/upsert</c>. Supply a
+    /// raw vector (<see cref="VectorUpsert.FromVector"/>) or text to embed on a node
+    /// (<see cref="VectorUpsert.FromText"/>). An existing id is overwritten. Unknown collection
+    /// or no embedding node → <c>404</c>, missing vector/text → <c>400</c>, all surfaced as
+    /// <see cref="Exceptions.InferHubException"/>.
+    /// </summary>
+    /// <param name="collection">Target collection name.</param>
+    /// <param name="upsert">Record to write. <see cref="VectorUpsert.Id"/> is required.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<VectorRecord> UpsertAsync(string collection, VectorUpsert upsert, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Nearest-neighbour search — <c>POST /api/vector/{collection}/query</c>. Search by a raw
+    /// vector or by text to embed (<see cref="VectorQuery.FromVector"/> / <see cref="VectorQuery.FromText"/>).
+    /// Returns up to <see cref="VectorQuery.K"/> ranked <see cref="VectorMatch"/> values, closest first.
+    /// Unknown collection → <c>404</c>.
+    /// </summary>
+    /// <param name="collection">Collection to search.</param>
+    /// <param name="query">Query body.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<IReadOnlyList<VectorMatch>> QueryAsync(string collection, VectorQuery query, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// RAG-convenience read — <c>POST /api/vector/{collection}/retrieve</c>. Same body and result
+    /// shape as <see cref="QueryAsync"/>; exists as the retrieval-oriented name callers reach for
+    /// when grounding a prompt.
+    /// </summary>
+    /// <param name="collection">Collection to search.</param>
+    /// <param name="query">Query body.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<IReadOnlyList<VectorMatch>> RetrieveAsync(string collection, VectorQuery query, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Fetch a single record by id — <c>GET /api/vector/{collection}/{id}</c>. Returns <c>null</c>
+    /// when the record (or collection) is not found; other failures surface as
+    /// <see cref="Exceptions.InferHubException"/>.
+    /// </summary>
+    /// <param name="collection">Collection name.</param>
+    /// <param name="id">Record id.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<VectorRecord?> GetRecordAsync(string collection, string id, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Delete a record by id — <c>DELETE /api/vector/{collection}/{id}</c>. Returns <c>true</c> when
+    /// a record was removed, <c>false</c> when it did not exist; other failures surface as
+    /// <see cref="Exceptions.InferHubException"/>.
+    /// </summary>
+    /// <param name="collection">Collection name.</param>
+    /// <param name="id">Record id.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<bool> DeleteRecordAsync(string collection, string id, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Coordinator/fleet snapshot — <c>GET /api/status</c>.

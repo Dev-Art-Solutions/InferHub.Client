@@ -6,8 +6,9 @@ a self-hosted, Ollama-compatible inference mesh.
 Point it at a coordinator, pass a Bearer token, and call chat, generate, model listing
 and status from C# with typed requests, dependency injection, and no heavy dependencies.
 
-> **v0.3.0** — blocking + streaming inference, and embeddings (batch + legacy). Vector
-> data plane, RAG retrieval and admin follow in later phases.
+> **v0.4.0** — blocking + streaming inference, embeddings (batch + legacy), and the vector
+> data plane (upsert / query / retrieve / get / delete). RAG retrieval and admin follow in
+> later phases.
 
 ## Install
 
@@ -48,7 +49,7 @@ var chat = await client.ChatAsync(new ChatRequest
 Console.WriteLine(chat.Message?.Content);
 ```
 
-## What ships in v0.3.0
+## What ships in v0.4.0
 
 | Method | Endpoint |
 |---|---|
@@ -59,6 +60,11 @@ Console.WriteLine(chat.Message?.Content);
 | `GenerateStreamAsync` | `POST /api/generate` with `stream:true` (NDJSON → `IAsyncEnumerable<GenerateResponse>`) |
 | `EmbedAsync` | `POST /api/embed` (batch — single string or string[]) |
 | `EmbedLegacyAsync` | `POST /api/embeddings` (legacy single `prompt`) |
+| `UpsertAsync` | `POST /api/vector/{collection}/upsert` |
+| `QueryAsync` | `POST /api/vector/{collection}/query` |
+| `RetrieveAsync` | `POST /api/vector/{collection}/retrieve` |
+| `GetRecordAsync` | `GET /api/vector/{collection}/{id}` (→ `null` on 404) |
+| `DeleteRecordAsync` | `DELETE /api/vector/{collection}/{id}` (→ `false` on 404) |
 | `GetStatusAsync` | `GET /api/status` |
 | `PingAsync` | `GET /health` |
 
@@ -104,6 +110,41 @@ Console.WriteLine(batch.Embeddings[0].Length); // model dimension
 `/api/embeddings` for drop-in Ollama callers. An empty vector list on a 200 response is
 treated as malformed and surfaced as `InferHubException` — the client never returns a
 silent zero-vector result.
+
+### Vectors
+
+Text in, ranked matches out. The coordinator embeds `text` on a node for you, so you never
+have to hold a model client-side. Needs the coordinator running with `VectorStore:Enabled=true`
+and the collection already created (admin plane, later phase).
+
+```csharp
+using InferHub.Client.Models.Vector;
+
+// Upsert — embed text on a node, keep the original as an opaque payload.
+await client.UpsertAsync("docs", VectorUpsert
+    .FromText("doc-1", "InferHub is a self-hosted inference mesh.", "nomic-embed-text")
+    .WithPayload(new { title = "About" })
+    .WithMetadata(new Dictionary<string, string> { ["kind"] = "doc" }));
+
+// Query — text in, closest matches out.
+var matches = await client.QueryAsync("docs",
+    VectorQuery.FromText("what is InferHub?", "nomic-embed-text", k: 3));
+
+foreach (var m in matches)
+    Console.WriteLine($"{m.Score:F3}  {m.Id}");
+
+// Read the payload back into your own type.
+var record = await client.GetRecordAsync("docs", "doc-1"); // null if absent
+var title = record?.Payload.As<Doc>()?.Title;
+
+await client.DeleteRecordAsync("docs", "doc-1"); // false if it wasn't there
+```
+
+Pass a raw vector instead of text with `VectorUpsert.FromVector` / `VectorQuery.FromVector`.
+`payload` is exposed as a `JsonElement?`; call `.As<T>()` to deserialize it. `GetRecordAsync`
+returns `null` and `DeleteRecordAsync` returns `false` on a 404; every other non-success
+status is an `InferHubException`. `RetrieveAsync` is the same call as `QueryAsync` under the
+RAG-oriented name. See `samples/MiniRag` for a runnable embed-then-query loop.
 
 ## Auth
 

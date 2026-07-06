@@ -4,6 +4,7 @@ using System.Text.Json;
 using InferHub.Client.Exceptions;
 using InferHub.Client.Models;
 using InferHub.Client.Models.Ollama;
+using InferHub.Client.Models.Vector;
 
 namespace InferHub.Client;
 
@@ -90,10 +91,73 @@ public sealed class InferHubClient : IInferHubClient
     }
 
     /// <inheritdoc/>
+    public async Task<VectorRecord> UpsertAsync(string collection, VectorUpsert upsert, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(collection);
+        ArgumentNullException.ThrowIfNull(upsert);
+        return await PostAsync<VectorUpsert, VectorRecord>($"api/vector/{Escape(collection)}/upsert", upsert, cancellationToken);
+    }
+
+    /// <inheritdoc/>
+    public async Task<IReadOnlyList<VectorMatch>> QueryAsync(string collection, VectorQuery query, CancellationToken cancellationToken = default)
+    {
+        return await SearchAsync(collection, "query", query, cancellationToken);
+    }
+
+    /// <inheritdoc/>
+    public async Task<IReadOnlyList<VectorMatch>> RetrieveAsync(string collection, VectorQuery query, CancellationToken cancellationToken = default)
+    {
+        return await SearchAsync(collection, "retrieve", query, cancellationToken);
+    }
+
+    /// <inheritdoc/>
+    public async Task<VectorRecord?> GetRecordAsync(string collection, string id, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(collection);
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+
+        using var response = await httpClient.GetAsync($"api/vector/{Escape(collection)}/{Escape(id)}", cancellationToken);
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+
+        await EnsureSuccessAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<VectorRecord>(JsonOptions, cancellationToken)
+            ?? throw new InferHubException(response.StatusCode, "empty response body", string.Empty);
+    }
+
+    /// <inheritdoc/>
+    public async Task<bool> DeleteRecordAsync(string collection, string id, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(collection);
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+
+        using var response = await httpClient.DeleteAsync($"api/vector/{Escape(collection)}/{Escape(id)}", cancellationToken);
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            return false;
+        }
+
+        await EnsureSuccessAsync(response, cancellationToken);
+        return true;
+    }
+
+    /// <inheritdoc/>
     public async Task<StatusResponse> GetStatusAsync(CancellationToken cancellationToken = default)
     {
         return await GetAsync<StatusResponse>("api/status", cancellationToken);
     }
+
+    private async Task<IReadOnlyList<VectorMatch>> SearchAsync(string collection, string action, VectorQuery query, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(collection);
+        ArgumentNullException.ThrowIfNull(query);
+        var envelope = await PostAsync<VectorQuery, VectorMatchesResponse>($"api/vector/{Escape(collection)}/{action}", query, cancellationToken);
+        return envelope.Matches;
+    }
+
+    private static string Escape(string segment) => Uri.EscapeDataString(segment);
 
     /// <inheritdoc/>
     public async Task<bool> PingAsync(CancellationToken cancellationToken = default)

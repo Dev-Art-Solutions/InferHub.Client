@@ -4,6 +4,7 @@ using InferHub.Client.Configuration;
 using InferHub.Client.Exceptions;
 using InferHub.Client.Extensions;
 using InferHub.Client.Models.Ollama;
+using InferHub.Client.Models.Vector;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace InferHub.Client.Tests;
@@ -370,6 +371,164 @@ public class InferHubClientTests
             client.EmbedLegacyAsync(new EmbeddingsRequest { Model = "m", Prompt = "p" }));
 
         Assert.Contains("no vector", ex.Message);
+    }
+
+    [Fact]
+    public async Task UpsertAsync_from_text_posts_body_and_returns_record()
+    {
+        const string body = """{"id":"doc-1","vector":[0.1,0.2],"metadata":{"kind":"doc"},"seqNo":7,"timestampUtc":"2026-07-06T00:00:00Z"}""";
+        var (client, handler) = CreateClient(HttpStatusCode.OK, body);
+
+        var record = await client.UpsertAsync(
+            "docs",
+            VectorUpsert.FromText("doc-1", "hello world", "nomic-embed-text")
+                .WithMetadata(new Dictionary<string, string> { ["kind"] = "doc" }));
+
+        Assert.Equal("doc-1", record.Id);
+        Assert.Equal(new[] { 0.1f, 0.2f }, record.Vector);
+        Assert.Equal(7L, record.SeqNo);
+        Assert.Equal("doc", record.Metadata!["kind"]);
+
+        Assert.Equal(HttpMethod.Post, handler.Requests[0].Method);
+        Assert.EndsWith("api/vector/docs/upsert", handler.Requests[0].RequestUri!.ToString());
+
+        var sent = JsonDocument.Parse(handler.RequestBodies[0]).RootElement;
+        Assert.Equal("doc-1", sent.GetProperty("id").GetString());
+        Assert.Equal("hello world", sent.GetProperty("text").GetString());
+        Assert.Equal("nomic-embed-text", sent.GetProperty("model").GetString());
+        Assert.Equal("doc", sent.GetProperty("metadata").GetProperty("kind").GetString());
+        Assert.False(sent.TryGetProperty("vector", out _));
+    }
+
+    [Fact]
+    public async Task UpsertAsync_with_payload_serializes_payload_object()
+    {
+        var (client, handler) = CreateClient(HttpStatusCode.OK, """{"id":"a","vector":[1],"seqNo":1,"timestampUtc":"2026-07-06T00:00:00Z"}""");
+
+        await client.UpsertAsync("docs", VectorUpsert.FromVector("a", new[] { 1f }).WithPayload(new { title = "t", n = 3 }));
+
+        var sent = JsonDocument.Parse(handler.RequestBodies[0]).RootElement;
+        var payload = sent.GetProperty("payload");
+        Assert.Equal("t", payload.GetProperty("title").GetString());
+        Assert.Equal(3, payload.GetProperty("n").GetInt32());
+    }
+
+    [Fact]
+    public async Task QueryAsync_returns_matches_from_envelope()
+    {
+        const string body = """{"matches":[{"id":"a","score":0.9,"metadata":{"k":"v"}},{"id":"b","score":0.4}]}""";
+        var (client, handler) = CreateClient(HttpStatusCode.OK, body);
+
+        var matches = await client.QueryAsync("docs", VectorQuery.FromText("find me", k: 2));
+
+        Assert.Equal(2, matches.Count);
+        Assert.Equal("a", matches[0].Id);
+        Assert.Equal(0.9, matches[0].Score);
+        Assert.Equal("v", matches[0].Metadata!["k"]);
+        Assert.EndsWith("api/vector/docs/query", handler.Requests[0].RequestUri!.ToString());
+
+        var sent = JsonDocument.Parse(handler.RequestBodies[0]).RootElement;
+        Assert.Equal("find me", sent.GetProperty("text").GetString());
+        Assert.Equal(2, sent.GetProperty("k").GetInt32());
+    }
+
+    [Fact]
+    public async Task RetrieveAsync_hits_retrieve_endpoint()
+    {
+        var (client, handler) = CreateClient(HttpStatusCode.OK, """{"matches":[]}""");
+
+        var matches = await client.RetrieveAsync("docs", VectorQuery.FromVector(new[] { 0.1f, 0.2f }));
+
+        Assert.Empty(matches);
+        Assert.EndsWith("api/vector/docs/retrieve", handler.Requests[0].RequestUri!.ToString());
+    }
+
+    [Fact]
+    public async Task QueryAsync_with_filter_sends_filter_object()
+    {
+        var (client, handler) = CreateClient(HttpStatusCode.OK, """{"matches":[]}""");
+
+        await client.QueryAsync("docs", VectorQuery.FromText("q").WithFilter(new Dictionary<string, string> { ["lang"] = "en" }));
+
+        var sent = JsonDocument.Parse(handler.RequestBodies[0]).RootElement;
+        Assert.Equal("en", sent.GetProperty("filter").GetProperty("lang").GetString());
+    }
+
+    [Fact]
+    public async Task GetRecordAsync_returns_record_and_reads_typed_payload()
+    {
+        const string body = """{"id":"doc-1","vector":[0.1],"payload":{"title":"hello"},"seqNo":3,"timestampUtc":"2026-07-06T00:00:00Z"}""";
+        var (client, handler) = CreateClient(HttpStatusCode.OK, body);
+
+        var record = await client.GetRecordAsync("docs", "doc-1");
+
+        Assert.NotNull(record);
+        Assert.Equal("doc-1", record!.Id);
+        Assert.EndsWith("api/vector/docs/doc-1", handler.Requests[0].RequestUri!.ToString());
+
+        var payload = record.Payload.As<PayloadDto>();
+        Assert.Equal("hello", payload!.Title);
+    }
+
+    [Fact]
+    public async Task GetRecordAsync_returns_null_on_404()
+    {
+        var (client, _) = CreateClient(HttpStatusCode.NotFound, """{"error":"record 'x' not found"}""");
+
+        Assert.Null(await client.GetRecordAsync("docs", "x"));
+    }
+
+    [Fact]
+    public async Task DeleteRecordAsync_returns_true_on_success()
+    {
+        var (client, handler) = CreateClient(HttpStatusCode.OK, """{"id":"doc-1","deleted":true}""");
+
+        Assert.True(await client.DeleteRecordAsync("docs", "doc-1"));
+        Assert.Equal(HttpMethod.Delete, handler.Requests[0].Method);
+        Assert.EndsWith("api/vector/docs/doc-1", handler.Requests[0].RequestUri!.ToString());
+    }
+
+    [Fact]
+    public async Task DeleteRecordAsync_returns_false_on_404()
+    {
+        var (client, _) = CreateClient(HttpStatusCode.NotFound, """{"error":"record 'x' not found"}""");
+
+        Assert.False(await client.DeleteRecordAsync("docs", "x"));
+    }
+
+    [Fact]
+    public async Task UpsertAsync_unknown_collection_surfaces_404()
+    {
+        var (client, _) = CreateClient(HttpStatusCode.NotFound, """{"error":"collection 'nope' not found"}""");
+
+        var ex = await Assert.ThrowsAsync<InferHubException>(() =>
+            client.UpsertAsync("nope", VectorUpsert.FromVector("a", new[] { 1f })));
+
+        Assert.Equal(HttpStatusCode.NotFound, ex.StatusCode);
+        Assert.Equal("collection 'nope' not found", ex.Message);
+    }
+
+    [Fact]
+    public async Task QueryAsync_missing_vector_and_text_surfaces_400()
+    {
+        var (client, _) = CreateClient(HttpStatusCode.BadRequest, """{"error":"either 'vector' or 'text' must be provided"}""");
+
+        var ex = await Assert.ThrowsAsync<InferHubException>(() =>
+            client.QueryAsync("docs", new VectorQuery()));
+
+        Assert.Equal(HttpStatusCode.BadRequest, ex.StatusCode);
+    }
+
+    [Fact]
+    public void PayloadExtensions_As_returns_default_for_absent_payload()
+    {
+        JsonElement? absent = null;
+        Assert.Null(absent.As<PayloadDto>());
+    }
+
+    private sealed class PayloadDto
+    {
+        public string? Title { get; set; }
     }
 
     [Fact]
