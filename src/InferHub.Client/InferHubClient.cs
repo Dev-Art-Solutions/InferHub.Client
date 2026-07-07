@@ -31,38 +31,64 @@ public sealed class InferHubClient : IInferHubClient
     }
 
     /// <inheritdoc/>
-    public async Task<ChatResponse> ChatAsync(ChatRequest request, CancellationToken cancellationToken = default)
+    public Task<ChatResponse> ChatAsync(ChatRequest request, CancellationToken cancellationToken = default)
+        => ChatAsync(request, null, cancellationToken);
+
+    /// <inheritdoc/>
+    public async Task<ChatResponse> ChatAsync(ChatRequest request, InferHubCallOptions? options, CancellationToken cancellationToken = default)
     {
         request.Stream = false;
-        return await PostAsync<ChatRequest, ChatResponse>("api/chat", request, cancellationToken);
+        return await PostForResultAsync<ChatRequest, ChatResponse>(
+            "api/chat", request, options,
+            static (r, sources) => r.SourceIds = sources,
+            cancellationToken);
     }
 
     /// <inheritdoc/>
-    public async Task<GenerateResponse> GenerateAsync(GenerateRequest request, CancellationToken cancellationToken = default)
+    public Task<GenerateResponse> GenerateAsync(GenerateRequest request, CancellationToken cancellationToken = default)
+        => GenerateAsync(request, null, cancellationToken);
+
+    /// <inheritdoc/>
+    public async Task<GenerateResponse> GenerateAsync(GenerateRequest request, InferHubCallOptions? options, CancellationToken cancellationToken = default)
     {
         request.Stream = false;
-        return await PostAsync<GenerateRequest, GenerateResponse>("api/generate", request, cancellationToken);
+        return await PostForResultAsync<GenerateRequest, GenerateResponse>(
+            "api/generate", request, options,
+            static (r, sources) => r.SourceIds = sources,
+            cancellationToken);
     }
 
     /// <inheritdoc/>
     public IAsyncEnumerable<ChatResponse> ChatStreamAsync(ChatRequest request, CancellationToken cancellationToken = default)
+        => ChatStreamAsync(request, null, cancellationToken);
+
+    /// <inheritdoc/>
+    public IAsyncEnumerable<ChatResponse> ChatStreamAsync(ChatRequest request, InferHubCallOptions? options, CancellationToken cancellationToken = default)
     {
         request.Stream = true;
         return StreamNdjsonAsync<ChatRequest, ChatResponse>(
             "api/chat",
             request,
             static chunk => (chunk.Done == true, chunk.Error),
+            static (chunk, sources) => chunk.SourceIds = sources,
+            options,
             cancellationToken);
     }
 
     /// <inheritdoc/>
     public IAsyncEnumerable<GenerateResponse> GenerateStreamAsync(GenerateRequest request, CancellationToken cancellationToken = default)
+        => GenerateStreamAsync(request, null, cancellationToken);
+
+    /// <inheritdoc/>
+    public IAsyncEnumerable<GenerateResponse> GenerateStreamAsync(GenerateRequest request, InferHubCallOptions? options, CancellationToken cancellationToken = default)
     {
         request.Stream = true;
         return StreamNdjsonAsync<GenerateRequest, GenerateResponse>(
             "api/generate",
             request,
             static chunk => (chunk.Done == true, chunk.Error),
+            static (chunk, sources) => chunk.SourceIds = sources,
+            options,
             cancellationToken);
     }
 
@@ -182,10 +208,34 @@ public sealed class InferHubClient : IInferHubClient
         return result ?? throw new InferHubException(response.StatusCode, "empty response body", string.Empty);
     }
 
+    private async Task<TResult> PostForResultAsync<TRequest, TResult>(
+        string path,
+        TRequest body,
+        InferHubCallOptions? options,
+        Action<TResult, IReadOnlyList<string>?> setSources,
+        CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, path)
+        {
+            Content = JsonContent.Create(body, mediaType: null, options: JsonOptions)
+        };
+        ApplyCallHeaders(request, options);
+
+        using var response = await httpClient.SendAsync(request, cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+
+        var result = await response.Content.ReadFromJsonAsync<TResult>(JsonOptions, cancellationToken)
+            ?? throw new InferHubException(response.StatusCode, "empty response body", string.Empty);
+        setSources(result, ParseSourceIds(response));
+        return result;
+    }
+
     private async IAsyncEnumerable<TChunk> StreamNdjsonAsync<TRequest, TChunk>(
         string path,
         TRequest body,
         Func<TChunk, (bool Done, string? Error)> inspect,
+        Action<TChunk, IReadOnlyList<string>?> setSources,
+        InferHubCallOptions? options,
         [EnumeratorCancellation] CancellationToken cancellationToken)
         where TChunk : class
     {
@@ -193,8 +243,11 @@ public sealed class InferHubClient : IInferHubClient
         {
             Content = JsonContent.Create(body, mediaType: null, options: JsonOptions)
         };
+        ApplyCallHeaders(request, options);
         using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
+
+        var sources = ParseSourceIds(response);
 
         using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var reader = new StreamReader(stream);
@@ -234,6 +287,7 @@ public sealed class InferHubClient : IInferHubClient
                 throw new InferHubException(response.StatusCode, error, line);
             }
 
+            setSources(chunk, sources);
             yield return chunk;
 
             if (done)
@@ -252,7 +306,89 @@ public sealed class InferHubClient : IInferHubClient
 
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
         var message = TryExtractErrorMessage(body) ?? $"InferHub request failed with status {(int)response.StatusCode} ({response.StatusCode}).";
+
+        if (response.StatusCode == System.Net.HttpStatusCode.FailedDependency)
+        {
+            throw new InferHubRetrievalException(message, body);
+        }
+
         throw new InferHubException(response.StatusCode, message, body);
+    }
+
+    private static void ApplyCallHeaders(HttpRequestMessage request, InferHubCallOptions? options)
+    {
+        if (options is null)
+        {
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(options.ConversationId))
+        {
+            request.Headers.TryAddWithoutValidation("X-InferHub-Conversation", options.ConversationId);
+        }
+
+        var retrieval = options.Retrieval;
+        if (retrieval is null)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(retrieval.Collection))
+        {
+            throw new ArgumentException("RetrievalOptions.Collection is required.", nameof(options));
+        }
+
+        request.Headers.TryAddWithoutValidation("X-InferHub-Retrieve", retrieval.Collection);
+
+        if (retrieval.K is int k)
+        {
+            request.Headers.TryAddWithoutValidation("X-InferHub-Retrieve-K", k.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+
+        if (!string.IsNullOrWhiteSpace(retrieval.Model))
+        {
+            request.Headers.TryAddWithoutValidation("X-InferHub-Retrieve-Model", retrieval.Model);
+        }
+    }
+
+    private static IReadOnlyList<string>? ParseSourceIds(HttpResponseMessage response)
+    {
+        if (!response.Headers.TryGetValues("X-InferHub-Sources", out var values))
+        {
+            return null;
+        }
+
+        var raw = string.Concat(values).Trim();
+        if (raw.Length == 0)
+        {
+            return Array.Empty<string>();
+        }
+
+        // The coordinator echoes a JSON array: X-InferHub-Sources: ["id", "id2"].
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            if (doc.RootElement.ValueKind == JsonValueKind.Array)
+            {
+                var ids = new List<string>(doc.RootElement.GetArrayLength());
+                foreach (var element in doc.RootElement.EnumerateArray())
+                {
+                    var id = element.ValueKind == JsonValueKind.String ? element.GetString() : element.GetRawText();
+                    if (!string.IsNullOrEmpty(id))
+                    {
+                        ids.Add(id);
+                    }
+                }
+
+                return ids;
+            }
+        }
+        catch (JsonException)
+        {
+            // Not a JSON array — fall back to a comma-separated list.
+        }
+
+        return raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
     }
 
     private static string? TryExtractErrorMessage(string body)

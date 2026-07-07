@@ -532,6 +532,137 @@ public class InferHubClientTests
     }
 
     [Fact]
+    public async Task ChatAsync_with_retrieval_options_sends_retrieve_headers()
+    {
+        const string body = """{"model":"llama3","message":{"role":"assistant","content":"grounded"},"done":true}""";
+        var (client, handler) = CreateClient(HttpStatusCode.OK, body);
+
+        await client.ChatAsync(
+            new ChatRequest { Model = "llama3", Messages = new[] { new ChatMessage { Role = "user", Content = "q" } } },
+            new InferHubCallOptions
+            {
+                Retrieval = new RetrievalOptions("docs") { K = 5, Model = "nomic-embed-text" },
+                ConversationId = "conv-1"
+            });
+
+        var headers = handler.Requests[0].Headers;
+        Assert.Equal("docs", headers.GetValues("X-InferHub-Retrieve").Single());
+        Assert.Equal("5", headers.GetValues("X-InferHub-Retrieve-K").Single());
+        Assert.Equal("nomic-embed-text", headers.GetValues("X-InferHub-Retrieve-Model").Single());
+        Assert.Equal("conv-1", headers.GetValues("X-InferHub-Conversation").Single());
+    }
+
+    [Fact]
+    public async Task ChatAsync_without_options_sends_no_inferhub_headers()
+    {
+        var (client, handler) = CreateClient(HttpStatusCode.OK, """{"model":"llama3","message":{"role":"assistant","content":"hi"},"done":true}""");
+
+        await client.ChatAsync(new ChatRequest { Model = "llama3" });
+
+        var headers = handler.Requests[0].Headers;
+        Assert.False(headers.Contains("X-InferHub-Retrieve"));
+        Assert.False(headers.Contains("X-InferHub-Conversation"));
+    }
+
+    [Fact]
+    public async Task ChatAsync_omits_optional_retrieve_headers_when_null()
+    {
+        var (client, handler) = CreateClient(HttpStatusCode.OK, """{"model":"llama3","message":{"role":"assistant","content":"hi"},"done":true}""");
+
+        await client.ChatAsync(new ChatRequest { Model = "llama3" }, InferHubCallOptions.ForRetrieval("docs"));
+
+        var headers = handler.Requests[0].Headers;
+        Assert.Equal("docs", headers.GetValues("X-InferHub-Retrieve").Single());
+        Assert.False(headers.Contains("X-InferHub-Retrieve-K"));
+        Assert.False(headers.Contains("X-InferHub-Retrieve-Model"));
+    }
+
+    [Fact]
+    public async Task ChatAsync_parses_source_ids_from_response_header()
+    {
+        var (client, handler) = CreateClient(HttpStatusCode.OK, """{"model":"llama3","message":{"role":"assistant","content":"a"},"done":true}""");
+        handler.ResponseHeaders["X-InferHub-Sources"] = """["doc-1","doc-2"]""";
+
+        var response = await client.ChatAsync(new ChatRequest { Model = "llama3" }, InferHubCallOptions.ForRetrieval("docs"));
+
+        Assert.Equal(new[] { "doc-1", "doc-2" }, response.SourceIds);
+    }
+
+    [Fact]
+    public async Task ChatAsync_source_ids_null_when_header_absent()
+    {
+        var (client, _) = CreateClient(HttpStatusCode.OK, """{"model":"llama3","message":{"role":"assistant","content":"a"},"done":true}""");
+
+        var response = await client.ChatAsync(new ChatRequest { Model = "llama3" });
+
+        Assert.Null(response.SourceIds);
+    }
+
+    [Fact]
+    public async Task GenerateAsync_with_retrieval_returns_source_ids()
+    {
+        var (client, handler) = CreateClient(HttpStatusCode.OK, """{"model":"llama3","response":"grounded","done":true}""");
+        handler.ResponseHeaders["X-InferHub-Sources"] = """["r1"]""";
+
+        var response = await client.GenerateAsync(
+            new GenerateRequest { Model = "llama3", Prompt = "q" },
+            InferHubCallOptions.ForRetrieval("docs", k: 3));
+
+        Assert.Equal(new[] { "r1" }, response.SourceIds);
+        Assert.Equal("3", handler.Requests[0].Headers.GetValues("X-InferHub-Retrieve-K").Single());
+    }
+
+    [Fact]
+    public async Task ChatAsync_424_surfaces_InferHubRetrievalException()
+    {
+        var (client, _) = CreateClient((HttpStatusCode)424, """{"error":"retrieval unavailable"}""");
+
+        var ex = await Assert.ThrowsAsync<InferHubRetrievalException>(() =>
+            client.ChatAsync(new ChatRequest { Model = "llama3" }, InferHubCallOptions.ForRetrieval("docs")));
+
+        Assert.Equal(HttpStatusCode.FailedDependency, ex.StatusCode);
+        Assert.Equal("retrieval unavailable", ex.Message);
+        Assert.IsAssignableFrom<InferHubException>(ex);
+    }
+
+    [Fact]
+    public async Task ChatAsync_blank_retrieval_collection_throws_before_send()
+    {
+        var (client, handler) = CreateClient(HttpStatusCode.OK, """{"model":"llama3","message":{"role":"assistant","content":"x"},"done":true}""");
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            client.ChatAsync(new ChatRequest { Model = "llama3" }, new InferHubCallOptions { Retrieval = new RetrievalOptions("  ") }));
+
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task ChatStreamAsync_with_retrieval_sends_headers_and_stamps_source_ids_on_chunks()
+    {
+        var handler = new StreamingHttpMessageHandler();
+        handler.ResponseHeaders["X-InferHub-Sources"] = """["doc-7","doc-8"]""";
+        var http = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:5080/") };
+        var client = new InferHubClient(http);
+
+        handler.EnqueueLine("""{"model":"llama3","message":{"role":"assistant","content":"grn"},"done":false}""");
+        handler.EnqueueLine("""{"model":"llama3","message":{"role":"assistant","content":"ded"},"done":true}""");
+        handler.Complete();
+
+        var sources = new List<IReadOnlyList<string>?>();
+        await foreach (var chunk in client.ChatStreamAsync(
+            new ChatRequest { Model = "llama3" },
+            InferHubCallOptions.ForRetrieval("docs", k: 2)))
+        {
+            sources.Add(chunk.SourceIds);
+        }
+
+        Assert.Equal(2, sources.Count);
+        Assert.All(sources, s => Assert.Equal(new[] { "doc-7", "doc-8" }, s));
+        Assert.Equal("docs", handler.Requests[0].Headers.GetValues("X-InferHub-Retrieve").Single());
+        Assert.Equal("2", handler.Requests[0].Headers.GetValues("X-InferHub-Retrieve-K").Single());
+    }
+
+    [Fact]
     public async Task Bearer_handler_leaves_authorization_off_when_no_key()
     {
         var handler = new FakeHttpMessageHandler(HttpStatusCode.OK, """{"models":[]}""");

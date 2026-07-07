@@ -19,19 +19,42 @@ public interface IInferHubClient
 
     /// <summary>
     /// Blocking chat call — <c>POST /api/chat</c> with <c>stream:false</c>.
-    /// Streaming lands in a later phase.
     /// </summary>
     /// <param name="request">Chat request. <see cref="ChatRequest.Stream"/> is forced to <c>false</c>.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     Task<ChatResponse> ChatAsync(ChatRequest request, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Blocking chat call with per-call RAG/routing options — <c>POST /api/chat</c> with
+    /// <c>stream:false</c>. <paramref name="options"/> map to <c>X-InferHub-*</c> headers; when
+    /// retrieval is requested the returned <see cref="ChatResponse.SourceIds"/> carries the
+    /// grounding record ids from <c>X-InferHub-Sources</c>. A <c>424 Failed Dependency</c>
+    /// (retrieval unavailable / <c>OnMissing=error</c>) surfaces as
+    /// <see cref="Exceptions.InferHubRetrievalException"/>.
+    /// </summary>
+    /// <param name="request">Chat request. <see cref="ChatRequest.Stream"/> is forced to <c>false</c>.</param>
+    /// <param name="options">Per-call retrieval and conversation options; <c>null</c> for a plain call.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<ChatResponse> ChatAsync(ChatRequest request, InferHubCallOptions? options, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Blocking generate call — <c>POST /api/generate</c> with <c>stream:false</c>.
-    /// Streaming lands in a later phase.
     /// </summary>
     /// <param name="request">Generate request. <see cref="GenerateRequest.Stream"/> is forced to <c>false</c>.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     Task<GenerateResponse> GenerateAsync(GenerateRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Blocking generate call with per-call RAG/routing options — <c>POST /api/generate</c> with
+    /// <c>stream:false</c>. <paramref name="options"/> map to <c>X-InferHub-*</c> headers; when
+    /// retrieval is requested the returned <see cref="GenerateResponse.SourceIds"/> carries the
+    /// grounding record ids from <c>X-InferHub-Sources</c>. A <c>424 Failed Dependency</c>
+    /// surfaces as <see cref="Exceptions.InferHubRetrievalException"/>.
+    /// </summary>
+    /// <param name="request">Generate request. <see cref="GenerateRequest.Stream"/> is forced to <c>false</c>.</param>
+    /// <param name="options">Per-call retrieval and conversation options; <c>null</c> for a plain call.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<GenerateResponse> GenerateAsync(GenerateRequest request, InferHubCallOptions? options, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Streaming chat call — <c>POST /api/chat</c> with <c>stream:true</c>. Yields one
@@ -44,6 +67,19 @@ public interface IInferHubClient
     IAsyncEnumerable<ChatResponse> ChatStreamAsync(ChatRequest request, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Streaming chat call with per-call RAG/routing options — <c>POST /api/chat</c> with
+    /// <c>stream:true</c>. <paramref name="options"/> map to <c>X-InferHub-*</c> headers; when
+    /// retrieval is requested every yielded <see cref="ChatResponse"/> carries the same
+    /// <see cref="ChatResponse.SourceIds"/> (read from <c>X-InferHub-Sources</c> once, before the
+    /// first chunk). A <c>424 Failed Dependency</c> surfaces as
+    /// <see cref="Exceptions.InferHubRetrievalException"/>.
+    /// </summary>
+    /// <param name="request">Chat request. <see cref="ChatRequest.Stream"/> is forced to <c>true</c>.</param>
+    /// <param name="options">Per-call retrieval and conversation options; <c>null</c> for a plain call.</param>
+    /// <param name="cancellationToken">Cancels the read loop; a cancelled token throws promptly.</param>
+    IAsyncEnumerable<ChatResponse> ChatStreamAsync(ChatRequest request, InferHubCallOptions? options, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Streaming generate call — <c>POST /api/generate</c> with <c>stream:true</c>. Yields
     /// one <see cref="GenerateResponse"/> per NDJSON chunk; stops after <c>done:true</c>.
     /// A terminal error chunk is surfaced as an <see cref="Exceptions.InferHubException"/>.
@@ -51,6 +87,19 @@ public interface IInferHubClient
     /// <param name="request">Generate request. <see cref="GenerateRequest.Stream"/> is forced to <c>true</c>.</param>
     /// <param name="cancellationToken">Cancels the read loop; a cancelled token throws promptly.</param>
     IAsyncEnumerable<GenerateResponse> GenerateStreamAsync(GenerateRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Streaming generate call with per-call RAG/routing options — <c>POST /api/generate</c> with
+    /// <c>stream:true</c>. <paramref name="options"/> map to <c>X-InferHub-*</c> headers; when
+    /// retrieval is requested every yielded <see cref="GenerateResponse"/> carries the same
+    /// <see cref="GenerateResponse.SourceIds"/> (read from <c>X-InferHub-Sources</c> once, before
+    /// the first chunk). A <c>424 Failed Dependency</c> surfaces as
+    /// <see cref="Exceptions.InferHubRetrievalException"/>.
+    /// </summary>
+    /// <param name="request">Generate request. <see cref="GenerateRequest.Stream"/> is forced to <c>true</c>.</param>
+    /// <param name="options">Per-call retrieval and conversation options; <c>null</c> for a plain call.</param>
+    /// <param name="cancellationToken">Cancels the read loop; a cancelled token throws promptly.</param>
+    IAsyncEnumerable<GenerateResponse> GenerateStreamAsync(GenerateRequest request, InferHubCallOptions? options, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Batch embeddings call — <c>POST /api/embed</c>. Accepts a single string or a

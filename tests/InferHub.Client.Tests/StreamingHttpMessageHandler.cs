@@ -21,6 +21,9 @@ internal sealed class StreamingHttpMessageHandler : HttpMessageHandler
 
     public List<string> RequestBodies { get; } = new();
 
+    /// <summary>Custom response headers (e.g. <c>X-InferHub-Sources</c>) attached to the reply.</summary>
+    public Dictionary<string, string> ResponseHeaders { get; } = new();
+
     /// <summary>Enqueue a line — becomes visible to the next ReadAsync call.</summary>
     public void EnqueueLine(string line) => stream.EnqueueLine(line);
 
@@ -32,10 +35,17 @@ internal sealed class StreamingHttpMessageHandler : HttpMessageHandler
         Requests.Add(request);
         RequestBodies.Add(request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken));
 
-        return new HttpResponseMessage(HttpStatusCode.OK)
+        var response = new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StreamContent(stream)
         };
+
+        foreach (var (name, value) in ResponseHeaders)
+        {
+            response.Headers.TryAddWithoutValidation(name, value);
+        }
+
+        return response;
     }
 
     private sealed class ControlledStream : Stream

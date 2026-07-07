@@ -56,4 +56,13 @@ public sealed class GenerateResponse
     /// <summary>Any additional Ollama-shaped fields.</summary>
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? AdditionalProperties { get; set; }
+
+    /// <summary>
+    /// Ids of the records that grounded this response, parsed from the <c>X-InferHub-Sources</c>
+    /// response header. Populated only for a call made with a <see cref="RetrievalOptions"/>;
+    /// <c>null</c> when retrieval was not requested or the coordinator returned no sources header.
+    /// Not part of the JSON body.
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyList<string>? SourceIds { get; set; }
 }

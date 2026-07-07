@@ -23,6 +23,9 @@ internal sealed class FakeHttpMessageHandler : HttpMessageHandler
 
     public List<string> RequestBodies { get; } = new();
 
+    /// <summary>Custom response headers (e.g. <c>X-InferHub-Sources</c>) attached to every reply.</summary>
+    public Dictionary<string, string> ResponseHeaders { get; } = new();
+
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         Requests.Add(request);
@@ -35,9 +38,16 @@ internal sealed class FakeHttpMessageHandler : HttpMessageHandler
             RequestBodies.Add(string.Empty);
         }
 
-        return new HttpResponseMessage(statusCode)
+        var response = new HttpResponseMessage(statusCode)
         {
             Content = new StringContent(responseBody, System.Text.Encoding.UTF8, mediaType)
         };
+
+        foreach (var (name, value) in ResponseHeaders)
+        {
+            response.Headers.TryAddWithoutValidation(name, value);
+        }
+
+        return response;
     }
 }

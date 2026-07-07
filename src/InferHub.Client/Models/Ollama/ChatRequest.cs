@@ -14,7 +14,7 @@ public sealed class ChatRequest
     [JsonPropertyName("messages")]
     public IReadOnlyList<ChatMessage>? Messages { get; set; }
 
-    /// <summary>Whether to stream NDJSON chunks. <see cref="IInferHubClient.ChatAsync"/> forces this to <c>false</c>.</summary>
+    /// <summary>Whether to stream NDJSON chunks. <see cref="IInferHubClient.ChatAsync(ChatRequest, System.Threading.CancellationToken)"/> forces this to <c>false</c>.</summary>
     [JsonPropertyName("stream")]
     public bool? Stream { get; set; }
 

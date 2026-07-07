@@ -14,7 +14,7 @@ public sealed class GenerateRequest
     [JsonPropertyName("prompt")]
     public string? Prompt { get; set; }
 
-    /// <summary>Whether to stream NDJSON chunks. <see cref="IInferHubClient.GenerateAsync"/> forces this to <c>false</c>.</summary>
+    /// <summary>Whether to stream NDJSON chunks. <see cref="IInferHubClient.GenerateAsync(GenerateRequest, System.Threading.CancellationToken)"/> forces this to <c>false</c>.</summary>
     [JsonPropertyName("stream")]
     public bool? Stream { get; set; }
 
