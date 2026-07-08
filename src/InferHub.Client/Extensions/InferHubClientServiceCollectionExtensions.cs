@@ -4,12 +4,16 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace InferHub.Client.Extensions;
 
-/// <summary>DI wiring for <see cref="IInferHubClient"/>.</summary>
+/// <summary>DI wiring for <see cref="IInferHubClient"/> and <see cref="IInferHubAdminClient"/>.</summary>
 public static class InferHubClientServiceCollectionExtensions
 {
     /// <summary>
-    /// Register <see cref="IInferHubClient"/> with a typed <see cref="HttpClient"/> and a
-    /// bearer-auth <see cref="DelegatingHandler"/>.
+    /// Register <see cref="IInferHubClient"/> and <see cref="IInferHubAdminClient"/>, each
+    /// with its own typed <see cref="HttpClient"/> and bearer-auth <see cref="DelegatingHandler"/>.
+    /// The client sends <see cref="InferHubClientOptions.ApiKey"/>; the admin client sends
+    /// <see cref="InferHubClientOptions.AdminApiKey"/> and its <see cref="HttpClient"/> has
+    /// no overall timeout (the SSE admin stream is long-lived) —
+    /// <see cref="InferHubClientOptions.Timeout"/> is applied per non-streaming admin call.
     /// </summary>
     /// <param name="services">The service collection.</param>
     /// <param name="configure">Configure the options (base address, keys, timeout).</param>
@@ -29,6 +33,7 @@ public static class InferHubClientServiceCollectionExtensions
 
         services.AddSingleton(options);
         services.AddTransient<BearerAuthorizationHandler>(_ => new BearerAuthorizationHandler(options));
+        services.AddTransient<AdminBearerAuthorizationHandler>(_ => new AdminBearerAuthorizationHandler(options));
 
         services.AddHttpClient<IInferHubClient, InferHubClient>(client =>
         {
@@ -36,6 +41,13 @@ public static class InferHubClientServiceCollectionExtensions
             client.Timeout = options.Timeout;
         })
         .AddHttpMessageHandler<BearerAuthorizationHandler>();
+
+        services.AddHttpClient<IInferHubAdminClient, InferHubAdminClient>(client =>
+        {
+            client.BaseAddress = EnsureTrailingSlash(options.BaseAddress);
+            client.Timeout = Timeout.InfiniteTimeSpan;
+        })
+        .AddHttpMessageHandler<AdminBearerAuthorizationHandler>();
 
         return services;
     }

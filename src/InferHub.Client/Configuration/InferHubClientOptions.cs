@@ -20,8 +20,9 @@ public sealed class InferHubClientOptions
     public string? ApiKey { get; set; }
 
     /// <summary>
-    /// Admin API key. Reserved for the admin client interface added in a later phase; a
-    /// client key alone never surfaces admin methods.
+    /// Admin API key, sent as the bearer token by <see cref="IInferHubAdminClient"/> only.
+    /// The coordinator validates admin routes against a separate key set
+    /// (<c>Auth:AdminApiKeys</c>); a client key alone never surfaces admin methods.
     /// </summary>
     public string? AdminApiKey { get; set; }
 

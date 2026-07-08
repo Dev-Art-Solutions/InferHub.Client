@@ -6,9 +6,10 @@ a self-hosted, Ollama-compatible inference mesh.
 Point it at a coordinator, pass a Bearer token, and call chat, generate, model listing
 and status from C# with typed requests, dependency injection, and no heavy dependencies.
 
-> **v0.4.0** — blocking + streaming inference, embeddings (batch + legacy), and the vector
-> data plane (upsert / query / retrieve / get / delete). RAG retrieval and admin follow in
-> later phases.
+> **v0.6.0** — blocking + streaming inference, embeddings (batch + legacy), the vector
+> data plane (upsert / query / retrieve / get / delete), opt-in RAG retrieval (grounded
+> chat/generate with source ids), and the admin client (fleet ops, collection lifecycle,
+> live SSE event stream). Hardening and 1.0 follow.
 
 ## Install
 
@@ -49,7 +50,9 @@ var chat = await client.ChatAsync(new ChatRequest
 Console.WriteLine(chat.Message?.Content);
 ```
 
-## What ships in v0.4.0
+## What ships in v0.6.0
+
+`IInferHubClient` (client key):
 
 | Method | Endpoint |
 |---|---|
@@ -67,6 +70,24 @@ Console.WriteLine(chat.Message?.Content);
 | `DeleteRecordAsync` | `DELETE /api/vector/{collection}/{id}` (→ `false` on 404) |
 | `GetStatusAsync` | `GET /api/status` |
 | `PingAsync` | `GET /health` |
+
+Chat/generate (blocking and streaming) also take an optional `InferHubCallOptions` for
+per-call RAG retrieval and sticky conversation routing — see [RAG retrieval](#rag-retrieval).
+
+`IInferHubAdminClient` (admin key):
+
+| Method | Endpoint |
+|---|---|
+| `ListNodesAsync` | `GET /api/admin/nodes` |
+| `CordonAsync` / `UncordonAsync` | `POST /api/admin/nodes/{nodeId}/cordon` / `…/uncordon` |
+| `DeregisterAsync` | `POST /api/admin/nodes/{nodeId}/deregister` |
+| `DrainAsync` (extension) | client-side cordon + poll until `inFlight == 0` |
+| `ListCollectionsAsync` | `GET /api/admin/vector/collections` |
+| `GetCollectionAsync` | `GET /api/admin/vector/collections/{collection}` (→ `null` on 404) |
+| `CreateCollectionAsync` | `POST /api/admin/vector/collections` |
+| `DropCollectionAsync` | `DELETE /api/admin/vector/collections/{collection}` |
+| `RebuildAsync` | `POST /api/admin/vector/collections/{collection}/rebuild` |
+| `StreamAdminEventsAsync` | `GET /api/admin/stream` (SSE → `IAsyncEnumerable<AdminEvent>`) |
 
 ### Streaming
 
@@ -115,7 +136,7 @@ silent zero-vector result.
 
 Text in, ranked matches out. The coordinator embeds `text` on a node for you, so you never
 have to hold a model client-side. Needs the coordinator running with `VectorStore:Enabled=true`
-and the collection already created (admin plane, later phase).
+and the collection already created (see [Fleet + vector admin](#fleet--vector-admin)).
 
 ```csharp
 using InferHub.Client.Models.Vector;
@@ -146,6 +167,57 @@ returns `null` and `DeleteRecordAsync` returns `false` on a 404; every other non
 status is an `InferHubException`. `RetrieveAsync` is the same call as `QueryAsync` under the
 RAG-oriented name. See `samples/MiniRag` for a runnable embed-then-query loop.
 
+### RAG retrieval
+
+Ground a chat or generate call in a vector collection with one option object — the
+coordinator retrieves, augments the prompt in-flight, and echoes the grounding record ids:
+
+```csharp
+using InferHub.Client.Rag;
+
+var grounded = await client.ChatAsync(request,
+    InferHubCallOptions.ForRetrieval("docs", k: 4));
+
+Console.WriteLine(grounded.Message?.Content);
+Console.WriteLine(string.Join(", ", grounded.SourceIds ?? []));  // retrieved record ids
+```
+
+`InferHubCallOptions` also carries `ConversationId` for sticky routing
+(`ForConversation("...")`). When retrieval is unavailable and the coordinator is configured
+with `OnMissing=error`, the call throws `InferHubRetrievalException` (a `424`). Calls
+without options behave exactly as before. See `samples/GroundedChat`.
+
+### Fleet + vector admin
+
+Everything under `/api/admin/*` lives on `IInferHubAdminClient`, registered by the same
+`AddInferHubClient` call but authenticated with `AdminApiKey` — a client key alone never
+surfaces admin methods.
+
+```csharp
+var admin = provider.GetRequiredService<IInferHubAdminClient>();
+
+// Fleet: cordon a node, wait for in-flight work to finish, bring it back.
+var drained = await admin.DrainAsync("node-1");        // cordon + poll (client-side)
+await admin.UncordonAsync("node-1");
+
+// Vector collections: lifecycle + replica health.
+await admin.CreateCollectionAsync("docs", dimension: 768, distance: "cosine");
+var detail = await admin.GetCollectionAsync("docs");   // placement, underReplicated, stats
+await admin.RebuildAsync("docs");                      // force a heal-to-target re-push
+
+// Live ops feed: fleet snapshots + vector.* lifecycle events over SSE.
+await foreach (var ev in admin.StreamAdminEventsAsync(new AdminStreamOptions()))
+{
+    Console.WriteLine(ev.IsSnapshot
+        ? $"snapshot: {ev.Nodes!.Count} node(s)"
+        : $"#{ev.Sequence} {ev.Event} {ev.Collection}");
+}
+```
+
+The `AdminStreamOptions` overload reconnects with exponential backoff when the stream
+drops (auth failures are never retried); the plain overload is a single connection. See
+`samples/FleetOps` for a runnable fleet walk-through.
+
 ## Auth
 
 - Non-loopback calls need `ApiKey` (attached as `Authorization: Bearer <key>` by a
@@ -153,8 +225,8 @@ RAG-oriented name. See `samples/MiniRag` for a runnable embed-then-query loop.
 - Loopback calls to the coordinator skip auth by default (unless the coordinator sets
   `Auth:RequireAuthForLoopback=true`).
 - `/health` is always open.
-- Admin routes require a **separate** `AdminApiKey` and land on a dedicated interface in
-  a later phase; a client key alone never surfaces admin methods.
+- Admin routes require a **separate** `AdminApiKey`, sent only by `IInferHubAdminClient`;
+  a client key alone never surfaces admin methods.
 
 ## Errors
 
@@ -163,8 +235,9 @@ Any non-success HTTP response is surfaced as `InferHubException`, carrying:
 - `StatusCode` — the HTTP status
 - `Message` — the coordinator's `{ "error": "…" }` body if present
 
-The client treats `404` (model missing) and `424 Failed Dependency` (retrieval unavailable,
-added in a later phase) as distinct signals worth checking with `StatusCode`.
+The client treats `404` (model or collection missing) as a signal worth checking with
+`StatusCode`, and `424 Failed Dependency` (retrieval unavailable) gets its own subtype,
+`InferHubRetrievalException`.
 
 ## Links
 
