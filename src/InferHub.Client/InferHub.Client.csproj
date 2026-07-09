@@ -17,7 +17,8 @@
     <RepositoryType>git</RepositoryType>
     <PackageLicenseFile>LICENSE</PackageLicenseFile>
     <PackageTags>inferhub;ollama;llm;ai;client;sdk;dotnet;rag</PackageTags>
-    <PackageVersion>0.6.0</PackageVersion>
+    <PackageVersion>1.0.0</PackageVersion>
+    <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">

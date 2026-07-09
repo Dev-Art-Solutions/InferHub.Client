@@ -18,7 +18,8 @@ public sealed class VectorRecord
     public float[] Vector { get; set; } = Array.Empty<float>();
 
     /// <summary>
-    /// Opaque caller payload, echoed back verbatim. Use <see cref="VectorPayloadExtensions.As{T}"/>
+    /// Opaque caller payload, echoed back verbatim. Use
+    /// <see cref="VectorPayloadExtensions.As{T}(JsonElement?, JsonSerializerOptions?)"/>
     /// to deserialize it into your own type.
     /// </summary>
     [JsonPropertyName("payload")]

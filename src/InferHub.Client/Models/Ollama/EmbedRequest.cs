@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using InferHub.Client.Serialization;
 
 namespace InferHub.Client.Models.Ollama;
 
@@ -37,7 +38,7 @@ public sealed class EmbedRequest
         return new EmbedRequest
         {
             Model = model,
-            Input = JsonSerializer.SerializeToElement(text)
+            Input = JsonSerializer.SerializeToElement(text, InferHubJsonContext.Default.String)
         };
     }
 
@@ -48,7 +49,7 @@ public sealed class EmbedRequest
         return new EmbedRequest
         {
             Model = model,
-            Input = JsonSerializer.SerializeToElement(texts as string[] ?? texts.ToArray())
+            Input = JsonSerializer.SerializeToElement(texts as string[] ?? texts.ToArray(), InferHubJsonContext.Default.StringArray)
         };
     }
 }

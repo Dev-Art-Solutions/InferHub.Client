@@ -19,7 +19,7 @@ public sealed class VectorMatch
 
     /// <summary>
     /// The matched record's payload. Use
-    /// <see cref="VectorPayloadExtensions.As{T}"/> to deserialize it.
+    /// <see cref="VectorPayloadExtensions.As{T}(JsonElement?, JsonSerializerOptions?)"/> to deserialize it.
     /// </summary>
     [JsonPropertyName("payload")]
     public JsonElement? Payload { get; set; }

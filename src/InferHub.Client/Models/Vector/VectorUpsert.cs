@@ -1,5 +1,7 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 
 namespace InferHub.Client.Models.Vector;
 
@@ -52,10 +54,30 @@ public sealed class VectorUpsert
         return new VectorUpsert { Id = id, Text = text, Model = model };
     }
 
-    /// <summary>Attach a strongly-typed payload, serialized to JSON. Returns <c>this</c> for chaining.</summary>
+    /// <summary>
+    /// Attach a strongly-typed payload, serialized to JSON. Returns <c>this</c> for chaining.
+    /// </summary>
+    /// <remarks>
+    /// This overload uses reflection-based serialization for <typeparamref name="T"/>. Under
+    /// trimming or Native AOT, pass the <see cref="WithPayload{T}(T, JsonTypeInfo{T})"/>
+    /// overload with a source-generated <see cref="JsonTypeInfo{T}"/> to stay warning-free.
+    /// </remarks>
+    [RequiresUnreferencedCode("JSON serialization of the caller's payload type may require types that cannot be statically analysed. Use the JsonTypeInfo<T> overload for trimming/AOT.")]
+    [RequiresDynamicCode("JSON serialization of the caller's payload type may require runtime code generation. Use the JsonTypeInfo<T> overload for AOT.")]
     public VectorUpsert WithPayload<T>(T payload, JsonSerializerOptions? options = null)
     {
         Payload = JsonSerializer.SerializeToElement(payload, options);
+        return this;
+    }
+
+    /// <summary>
+    /// Attach a strongly-typed payload using a source-generated <see cref="JsonTypeInfo{T}"/>
+    /// — the trimming- and AOT-safe path. Returns <c>this</c> for chaining.
+    /// </summary>
+    public VectorUpsert WithPayload<T>(T payload, JsonTypeInfo<T> jsonTypeInfo)
+    {
+        ArgumentNullException.ThrowIfNull(jsonTypeInfo);
+        Payload = JsonSerializer.SerializeToElement(payload, jsonTypeInfo);
         return this;
     }
 

@@ -32,14 +32,19 @@ public static class InferHubClientServiceCollectionExtensions
         }
 
         services.AddSingleton(options);
+        services.AddTransient<TransientRetryHandler>(_ => new TransientRetryHandler(options));
         services.AddTransient<BearerAuthorizationHandler>(_ => new BearerAuthorizationHandler(options));
         services.AddTransient<AdminBearerAuthorizationHandler>(_ => new AdminBearerAuthorizationHandler(options));
 
+        // Retry is the outermost handler (no-op unless MaxRetryAttempts > 0), so a retried
+        // request still runs through auth; auth only adds the header when absent, so a resend
+        // never double-stamps it.
         services.AddHttpClient<IInferHubClient, InferHubClient>(client =>
         {
             client.BaseAddress = EnsureTrailingSlash(options.BaseAddress);
             client.Timeout = options.Timeout;
         })
+        .AddHttpMessageHandler<TransientRetryHandler>()
         .AddHttpMessageHandler<BearerAuthorizationHandler>();
 
         services.AddHttpClient<IInferHubAdminClient, InferHubAdminClient>(client =>
@@ -47,6 +52,7 @@ public static class InferHubClientServiceCollectionExtensions
             client.BaseAddress = EnsureTrailingSlash(options.BaseAddress);
             client.Timeout = Timeout.InfiniteTimeSpan;
         })
+        .AddHttpMessageHandler<TransientRetryHandler>()
         .AddHttpMessageHandler<AdminBearerAuthorizationHandler>();
 
         return services;

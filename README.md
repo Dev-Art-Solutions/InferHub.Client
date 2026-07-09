@@ -1,15 +1,22 @@
 # InferHub.Client
 
+[![NuGet](https://img.shields.io/nuget/v/InferHub.Client.svg)](https://www.nuget.org/packages/InferHub.Client/)
+[![NuGet downloads](https://img.shields.io/nuget/dt/InferHub.Client.svg)](https://www.nuget.org/packages/InferHub.Client/)
+[![build and test](https://github.com/Dev-Art-Solutions/InferHub.Client/actions/workflows/build-and-test.yml/badge.svg)](https://github.com/Dev-Art-Solutions/InferHub.Client/actions/workflows/build-and-test.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 A small, typed .NET client for [InferHub](https://github.com/Dev-Art-Solutions/InferHub) —
 a self-hosted, Ollama-compatible inference mesh.
 
 Point it at a coordinator, pass a Bearer token, and call chat, generate, model listing
 and status from C# with typed requests, dependency injection, and no heavy dependencies.
 
-> **v0.6.0** — blocking + streaming inference, embeddings (batch + legacy), the vector
-> data plane (upsert / query / retrieve / get / delete), opt-in RAG retrieval (grounded
-> chat/generate with source ids), and the admin client (fleet ops, collection lifecycle,
-> live SSE event stream). Hardening and 1.0 follow.
+> **v1.0.0** — the full mesh surface from one small package: blocking + streaming inference,
+> embeddings (batch + legacy), the vector data plane (upsert / query / retrieve / get / delete),
+> opt-in RAG retrieval (grounded chat/generate with source ids), and the admin client (fleet
+> ops, collection lifecycle, live SSE event stream). Trim- and AOT-friendly via source-generated
+> serialization, with optional off-by-default transient retries. The public API is now stable
+> under [semantic versioning](#versioning).
 
 ## Install
 
@@ -50,7 +57,7 @@ var chat = await client.ChatAsync(new ChatRequest
 Console.WriteLine(chat.Message?.Content);
 ```
 
-## What ships in v0.6.0
+## API surface
 
 `IInferHubClient` (client key):
 
@@ -238,6 +245,58 @@ Any non-success HTTP response is surfaced as `InferHubException`, carrying:
 The client treats `404` (model or collection missing) as a signal worth checking with
 `StatusCode`, and `424 Failed Dependency` (retrieval unavailable) gets its own subtype,
 `InferHubRetrievalException`.
+
+## Resilience
+
+Transient retries are **off by default**. Turn them on for brief coordinator restarts or
+network blips:
+
+```csharp
+services.AddInferHubClient(o =>
+{
+    o.BaseAddress = new Uri("http://localhost:5080");
+    o.MaxRetryAttempts = 3;                       // 0 = off (default)
+    o.RetryBaseDelay = TimeSpan.FromMilliseconds(200); // doubles each retry…
+    o.MaxRetryDelay = TimeSpan.FromSeconds(5);         // …capped here
+});
+```
+
+Retries apply **only to idempotent requests** — `GET`/`HEAD` (model list, status, health,
+record fetch, admin reads, and the initial SSE connect) — that fail with a connection error
+or a `5xx`/`408` status. A chat, generate, embed, upsert or delete is **never** silently
+re-run, and a stream is **never** retried mid-flight: a partial answer plus a clean exception
+stays the contract. The per-call timeout is `Options.Timeout` (100s by default).
+
+## Trimming & AOT
+
+The typed request/response surface is serialized through a source-generated
+`JsonSerializerContext`, so the library is trim- and Native-AOT-friendly
+(`<IsAotCompatible>true</IsAotCompatible>`) with no reflection over the DTO graph.
+
+The two generic payload escape hatches deserialize the *caller's* own type, which reflection
+can't preserve under trimming/AOT — so they come in two overloads:
+
+```csharp
+// Reflection-based — fine for JIT; flagged by the trim/AOT analyzers.
+upsert.WithPayload(new Doc { Title = "About" });
+var doc = record.Payload.As<Doc>();
+
+// AOT-safe — pass a source-generated JsonTypeInfo<T> from your own context.
+upsert.WithPayload(doc, MyJsonContext.Default.Doc);
+var doc2 = record.Payload.As(MyJsonContext.Default.Doc);
+```
+
+## Versioning
+
+From 1.0.0 the client follows [Semantic Versioning](https://semver.org):
+
+- **Patch** (`1.0.x`) — fixes, no API change.
+- **Minor** (`1.x.0`) — additive, source-compatible: new methods, new overloads, new options.
+- **Major** (`2.0.0`) — reserved for a breaking change to the public API.
+
+New capabilities land as overloads (as the per-call RAG options did), so existing call sites
+keep compiling across the whole `1.x` line. Client versions stay independent of the
+coordinator's; `1.0.0` targets the coordinator's `v2.x` HTTP surface.
 
 ## Links
 

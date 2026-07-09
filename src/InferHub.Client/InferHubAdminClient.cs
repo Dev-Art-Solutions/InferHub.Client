@@ -2,19 +2,18 @@ using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using InferHub.Client.Configuration;
 using InferHub.Client.Exceptions;
 using InferHub.Client.Models.Admin;
+using InferHub.Client.Serialization;
 
 namespace InferHub.Client;
 
 /// <inheritdoc cref="IInferHubAdminClient"/>
 public sealed class InferHubAdminClient : IInferHubAdminClient
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
-    {
-        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
-    };
+    private static InferHubJsonContext Json => InferHubJsonContext.Default;
 
     private readonly HttpClient httpClient;
     private readonly TimeSpan requestTimeout;
@@ -39,7 +38,7 @@ public sealed class InferHubAdminClient : IInferHubAdminClient
     /// <inheritdoc/>
     public async Task<IReadOnlyList<AdminNode>> ListNodesAsync(CancellationToken cancellationToken = default)
     {
-        return await GetAsync<AdminNode[]>("api/admin/nodes", cancellationToken);
+        return await GetAsync("api/admin/nodes", Json.AdminNodeArray, cancellationToken);
     }
 
     /// <inheritdoc/>
@@ -57,7 +56,7 @@ public sealed class InferHubAdminClient : IInferHubAdminClient
     /// <inheritdoc/>
     public async Task<CollectionsResponse> ListCollectionsAsync(CancellationToken cancellationToken = default)
     {
-        return await GetAsync<CollectionsResponse>("api/admin/vector/collections", cancellationToken);
+        return await GetAsync("api/admin/vector/collections", Json.CollectionsResponse, cancellationToken);
     }
 
     /// <inheritdoc/>
@@ -75,7 +74,7 @@ public sealed class InferHubAdminClient : IInferHubAdminClient
         }
 
         await Http.InferHubResponse.EnsureSuccessAsync(response, token);
-        return await response.Content.ReadFromJsonAsync<CollectionDetail>(JsonOptions, token)
+        return await response.Content.ReadFromJsonAsync(Json.CollectionDetail, token)
             ?? throw new InferHubException(response.StatusCode, "empty response body", string.Empty);
     }
 
@@ -89,10 +88,10 @@ public sealed class InferHubAdminClient : IInferHubAdminClient
 
         using var timeout = StartRequestTimeout(cancellationToken, out var token);
         using var response = await SendAsync(
-            () => httpClient.PostAsJsonAsync("api/admin/vector/collections", body, JsonOptions, token),
+            () => httpClient.PostAsJsonAsync("api/admin/vector/collections", body, Json.CreateCollectionRequest, token),
             cancellationToken);
         await Http.InferHubResponse.EnsureSuccessAsync(response, token);
-        return await response.Content.ReadFromJsonAsync<CollectionInfo>(JsonOptions, token)
+        return await response.Content.ReadFromJsonAsync(Json.CollectionInfo, token)
             ?? throw new InferHubException(response.StatusCode, "empty response body", string.Empty);
     }
 
@@ -250,7 +249,7 @@ public sealed class InferHubAdminClient : IInferHubAdminClient
         {
             if (eventName is null or "snapshot" or "message")
             {
-                var payload = JsonSerializer.Deserialize<AdminSnapshotPayload>(data, JsonOptions);
+                var payload = JsonSerializer.Deserialize(data, Json.AdminSnapshotPayload);
                 return new AdminEvent
                 {
                     Event = "snapshot",
@@ -258,7 +257,7 @@ public sealed class InferHubAdminClient : IInferHubAdminClient
                 };
             }
 
-            var vector = JsonSerializer.Deserialize<AdminVectorEventPayload>(data, JsonOptions);
+            var vector = JsonSerializer.Deserialize(data, Json.AdminVectorEventPayload);
             return new AdminEvent
             {
                 Event = eventName,
@@ -285,12 +284,12 @@ public sealed class InferHubAdminClient : IInferHubAdminClient
         await Http.InferHubResponse.EnsureSuccessAsync(response, token);
     }
 
-    private async Task<TResult> GetAsync<TResult>(string path, CancellationToken cancellationToken)
+    private async Task<TResult> GetAsync<TResult>(string path, JsonTypeInfo<TResult> resultInfo, CancellationToken cancellationToken)
     {
         using var timeout = StartRequestTimeout(cancellationToken, out var token);
         using var response = await SendAsync(() => httpClient.GetAsync(path, token), cancellationToken);
         await Http.InferHubResponse.EnsureSuccessAsync(response, token);
-        var result = await response.Content.ReadFromJsonAsync<TResult>(JsonOptions, token);
+        var result = await response.Content.ReadFromJsonAsync(resultInfo, token);
         return result ?? throw new InferHubException(response.StatusCode, "empty response body", string.Empty);
     }
 

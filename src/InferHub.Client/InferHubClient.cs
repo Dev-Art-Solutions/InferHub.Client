@@ -1,20 +1,19 @@
 using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using InferHub.Client.Exceptions;
 using InferHub.Client.Models;
 using InferHub.Client.Models.Ollama;
 using InferHub.Client.Models.Vector;
+using InferHub.Client.Serialization;
 
 namespace InferHub.Client;
 
 /// <inheritdoc cref="IInferHubClient"/>
 public sealed class InferHubClient : IInferHubClient
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
-    {
-        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
-    };
+    private static InferHubJsonContext Json => InferHubJsonContext.Default;
 
     private readonly HttpClient httpClient;
 
@@ -27,7 +26,7 @@ public sealed class InferHubClient : IInferHubClient
     /// <inheritdoc/>
     public async Task<TagsResponse> ListModelsAsync(CancellationToken cancellationToken = default)
     {
-        return await GetAsync<TagsResponse>("api/tags", cancellationToken);
+        return await GetAsync("api/tags", Json.TagsResponse, cancellationToken);
     }
 
     /// <inheritdoc/>
@@ -38,8 +37,8 @@ public sealed class InferHubClient : IInferHubClient
     public async Task<ChatResponse> ChatAsync(ChatRequest request, InferHubCallOptions? options, CancellationToken cancellationToken = default)
     {
         request.Stream = false;
-        return await PostForResultAsync<ChatRequest, ChatResponse>(
-            "api/chat", request, options,
+        return await PostForResultAsync(
+            "api/chat", request, Json.ChatRequest, Json.ChatResponse, options,
             static (r, sources) => r.SourceIds = sources,
             cancellationToken);
     }
@@ -52,8 +51,8 @@ public sealed class InferHubClient : IInferHubClient
     public async Task<GenerateResponse> GenerateAsync(GenerateRequest request, InferHubCallOptions? options, CancellationToken cancellationToken = default)
     {
         request.Stream = false;
-        return await PostForResultAsync<GenerateRequest, GenerateResponse>(
-            "api/generate", request, options,
+        return await PostForResultAsync(
+            "api/generate", request, Json.GenerateRequest, Json.GenerateResponse, options,
             static (r, sources) => r.SourceIds = sources,
             cancellationToken);
     }
@@ -66,9 +65,11 @@ public sealed class InferHubClient : IInferHubClient
     public IAsyncEnumerable<ChatResponse> ChatStreamAsync(ChatRequest request, InferHubCallOptions? options, CancellationToken cancellationToken = default)
     {
         request.Stream = true;
-        return StreamNdjsonAsync<ChatRequest, ChatResponse>(
+        return StreamNdjsonAsync(
             "api/chat",
             request,
+            Json.ChatRequest,
+            Json.ChatResponse,
             static chunk => (chunk.Done == true, chunk.Error),
             static (chunk, sources) => chunk.SourceIds = sources,
             options,
@@ -83,9 +84,11 @@ public sealed class InferHubClient : IInferHubClient
     public IAsyncEnumerable<GenerateResponse> GenerateStreamAsync(GenerateRequest request, InferHubCallOptions? options, CancellationToken cancellationToken = default)
     {
         request.Stream = true;
-        return StreamNdjsonAsync<GenerateRequest, GenerateResponse>(
+        return StreamNdjsonAsync(
             "api/generate",
             request,
+            Json.GenerateRequest,
+            Json.GenerateResponse,
             static chunk => (chunk.Done == true, chunk.Error),
             static (chunk, sources) => chunk.SourceIds = sources,
             options,
@@ -95,7 +98,7 @@ public sealed class InferHubClient : IInferHubClient
     /// <inheritdoc/>
     public async Task<EmbedResponse> EmbedAsync(EmbedRequest request, CancellationToken cancellationToken = default)
     {
-        var response = await PostAsync<EmbedRequest, EmbedResponse>("api/embed", request, cancellationToken);
+        var response = await PostAsync("api/embed", request, Json.EmbedRequest, Json.EmbedResponse, cancellationToken);
         if (response.Embeddings is null || response.Embeddings.Length == 0)
         {
             throw new InferHubException(System.Net.HttpStatusCode.OK, "embed response had no vectors", string.Empty);
@@ -107,7 +110,7 @@ public sealed class InferHubClient : IInferHubClient
     /// <inheritdoc/>
     public async Task<EmbeddingsResponse> EmbedLegacyAsync(EmbeddingsRequest request, CancellationToken cancellationToken = default)
     {
-        var response = await PostAsync<EmbeddingsRequest, EmbeddingsResponse>("api/embeddings", request, cancellationToken);
+        var response = await PostAsync("api/embeddings", request, Json.EmbeddingsRequest, Json.EmbeddingsResponse, cancellationToken);
         if (response.Embedding is null || response.Embedding.Length == 0)
         {
             throw new InferHubException(System.Net.HttpStatusCode.OK, "embeddings response had no vector", string.Empty);
@@ -121,7 +124,7 @@ public sealed class InferHubClient : IInferHubClient
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(collection);
         ArgumentNullException.ThrowIfNull(upsert);
-        return await PostAsync<VectorUpsert, VectorRecord>($"api/vector/{Escape(collection)}/upsert", upsert, cancellationToken);
+        return await PostAsync($"api/vector/{Escape(collection)}/upsert", upsert, Json.VectorUpsert, Json.VectorRecord, cancellationToken);
     }
 
     /// <inheritdoc/>
@@ -149,7 +152,7 @@ public sealed class InferHubClient : IInferHubClient
         }
 
         await EnsureSuccessAsync(response, cancellationToken);
-        return await response.Content.ReadFromJsonAsync<VectorRecord>(JsonOptions, cancellationToken)
+        return await response.Content.ReadFromJsonAsync(Json.VectorRecord, cancellationToken)
             ?? throw new InferHubException(response.StatusCode, "empty response body", string.Empty);
     }
 
@@ -172,14 +175,14 @@ public sealed class InferHubClient : IInferHubClient
     /// <inheritdoc/>
     public async Task<StatusResponse> GetStatusAsync(CancellationToken cancellationToken = default)
     {
-        return await GetAsync<StatusResponse>("api/status", cancellationToken);
+        return await GetAsync("api/status", Json.StatusResponse, cancellationToken);
     }
 
     private async Task<IReadOnlyList<VectorMatch>> SearchAsync(string collection, string action, VectorQuery query, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(collection);
         ArgumentNullException.ThrowIfNull(query);
-        var envelope = await PostAsync<VectorQuery, VectorMatchesResponse>($"api/vector/{Escape(collection)}/{action}", query, cancellationToken);
+        var envelope = await PostAsync($"api/vector/{Escape(collection)}/{action}", query, Json.VectorQuery, Json.VectorMatchesResponse, cancellationToken);
         return envelope.Matches;
     }
 
@@ -192,39 +195,46 @@ public sealed class InferHubClient : IInferHubClient
         return response.IsSuccessStatusCode;
     }
 
-    private async Task<TResult> GetAsync<TResult>(string path, CancellationToken cancellationToken)
+    private async Task<TResult> GetAsync<TResult>(string path, JsonTypeInfo<TResult> resultInfo, CancellationToken cancellationToken)
     {
         using var response = await httpClient.GetAsync(path, cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
-        var result = await response.Content.ReadFromJsonAsync<TResult>(JsonOptions, cancellationToken);
+        var result = await response.Content.ReadFromJsonAsync(resultInfo, cancellationToken);
         return result ?? throw new InferHubException(response.StatusCode, "empty response body", string.Empty);
     }
 
-    private async Task<TResult> PostAsync<TRequest, TResult>(string path, TRequest body, CancellationToken cancellationToken)
+    private async Task<TResult> PostAsync<TRequest, TResult>(
+        string path,
+        TRequest body,
+        JsonTypeInfo<TRequest> requestInfo,
+        JsonTypeInfo<TResult> resultInfo,
+        CancellationToken cancellationToken)
     {
-        using var response = await httpClient.PostAsJsonAsync(path, body, JsonOptions, cancellationToken);
+        using var response = await httpClient.PostAsJsonAsync(path, body, requestInfo, cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
-        var result = await response.Content.ReadFromJsonAsync<TResult>(JsonOptions, cancellationToken);
+        var result = await response.Content.ReadFromJsonAsync(resultInfo, cancellationToken);
         return result ?? throw new InferHubException(response.StatusCode, "empty response body", string.Empty);
     }
 
     private async Task<TResult> PostForResultAsync<TRequest, TResult>(
         string path,
         TRequest body,
+        JsonTypeInfo<TRequest> requestInfo,
+        JsonTypeInfo<TResult> resultInfo,
         InferHubCallOptions? options,
         Action<TResult, IReadOnlyList<string>?> setSources,
         CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, path)
         {
-            Content = JsonContent.Create(body, mediaType: null, options: JsonOptions)
+            Content = JsonContent.Create(body, requestInfo)
         };
         ApplyCallHeaders(request, options);
 
         using var response = await httpClient.SendAsync(request, cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
 
-        var result = await response.Content.ReadFromJsonAsync<TResult>(JsonOptions, cancellationToken)
+        var result = await response.Content.ReadFromJsonAsync(resultInfo, cancellationToken)
             ?? throw new InferHubException(response.StatusCode, "empty response body", string.Empty);
         setSources(result, ParseSourceIds(response));
         return result;
@@ -233,6 +243,8 @@ public sealed class InferHubClient : IInferHubClient
     private async IAsyncEnumerable<TChunk> StreamNdjsonAsync<TRequest, TChunk>(
         string path,
         TRequest body,
+        JsonTypeInfo<TRequest> requestInfo,
+        JsonTypeInfo<TChunk> chunkInfo,
         Func<TChunk, (bool Done, string? Error)> inspect,
         Action<TChunk, IReadOnlyList<string>?> setSources,
         InferHubCallOptions? options,
@@ -241,7 +253,7 @@ public sealed class InferHubClient : IInferHubClient
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, path)
         {
-            Content = JsonContent.Create(body, mediaType: null, options: JsonOptions)
+            Content = JsonContent.Create(body, requestInfo)
         };
         ApplyCallHeaders(request, options);
         using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
@@ -269,7 +281,7 @@ public sealed class InferHubClient : IInferHubClient
             TChunk? chunk;
             try
             {
-                chunk = JsonSerializer.Deserialize<TChunk>(line, JsonOptions);
+                chunk = JsonSerializer.Deserialize(line, chunkInfo);
             }
             catch (JsonException ex)
             {

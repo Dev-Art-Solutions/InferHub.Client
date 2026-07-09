@@ -31,4 +31,22 @@ public sealed class InferHubClientOptions
     /// 100 seconds — inference calls can take a while, tune to your workload.
     /// </summary>
     public TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(100);
+
+    /// <summary>
+    /// Number of automatic retries for transient failures. <b>Off by default</b> (<c>0</c>).
+    /// Retries apply only to idempotent requests (<c>GET</c>/<c>HEAD</c>) that fail with a
+    /// connection error or a <c>5xx</c>/<c>408</c> status — never a streaming or mutating call,
+    /// so a chat/generate/upsert is never silently re-run and a stream never retries mid-flight.
+    /// Set to a small number (e.g. <c>3</c>) to ride out brief coordinator restarts or blips.
+    /// </summary>
+    public int MaxRetryAttempts { get; set; }
+
+    /// <summary>
+    /// Base delay before the first retry; each subsequent retry doubles it (capped at
+    /// <see cref="MaxRetryDelay"/>). Only used when <see cref="MaxRetryAttempts"/> &gt; 0.
+    /// </summary>
+    public TimeSpan RetryBaseDelay { get; set; } = TimeSpan.FromMilliseconds(200);
+
+    /// <summary>Upper bound on the exponential retry back-off. Only used when <see cref="MaxRetryAttempts"/> &gt; 0.</summary>
+    public TimeSpan MaxRetryDelay { get; set; } = TimeSpan.FromSeconds(5);
 }
